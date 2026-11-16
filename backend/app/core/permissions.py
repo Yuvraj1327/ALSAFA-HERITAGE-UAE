@@ -86,7 +86,7 @@ PERMISSION_MATRIX: dict[Role, dict[Module, Grant]] = {
     Role.OWNER: {
         Module.DASHBOARD:         _g(ALL, A.READ, A.EXPORT),
         Module.BRANCH_MANAGEMENT: _g(ALL, A.READ, A.UPDATE, A.MANAGE),            # name / order / active only (D16)
-        Module.DAILY_REPORTS:     _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),  # UPDATE = audited void (D4)
+        Module.DAILY_REPORTS:     _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),  # UPDATE = audited void (D4) + Owner edit; EXPORT = PDF
         Module.CASH_BANKS:        _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),  # CREATE = transfer/POS settlement; UPDATE = audited void
         Module.OPENING_BALANCES:  _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
         Module.EXPENSES:          _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
@@ -108,7 +108,7 @@ PERMISSION_MATRIX: dict[Role, dict[Module, Grant]] = {
     Role.BRANCH_USER: {
         Module.DASHBOARD:         _g(OWN, A.READ),
         Module.BRANCH_MANAGEMENT: _g(OWN, A.READ),            # may see their own branch record; no management
-        Module.DAILY_REPORTS:     _g(OWN, A.READ, A.CREATE),  # never UPDATE / DELETE / EXPORT
+        Module.DAILY_REPORTS:     _g(OWN, A.READ, A.CREATE, A.EXPORT),  # EXPORT = own-branch PDF only; never UPDATE / DELETE
         # Step 13 (customer orders): own branch only. No cancel / refund (MANAGE). Assumption O1, awaiting Owner approval.
         Module.ORDERS:            _g(OWN, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
         Module.CUSTOMERS:         _g(OWN, A.READ, A.CREATE, A.UPDATE),

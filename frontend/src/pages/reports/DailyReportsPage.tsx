@@ -1,4 +1,4 @@
-import { Ban, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Ban, ChevronLeft, ChevronRight, Pencil } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Can } from '@/auth/permission-guards'
@@ -14,6 +14,8 @@ import { useDailyReports, useVoidDailyReport } from '@/hooks/use-reports'
 import { toApiError } from '@/lib/errors'
 import type { DailyReport } from '@/schemas/reports'
 import { dubaiToday } from '@/utils/format'
+import { EditReportDialog } from './EditReportDialog'
+import { PdfDownloadPanel } from './PdfDownloadPanel'
 import { ReportForm, SubmittedSummary } from './ReportForm'
 
 const PAGE_SIZE = 25
@@ -28,6 +30,7 @@ export function DailyReportsPage() {
   const [reason, setReason] = useState('')
   const [reasonError, setReasonError] = useState<string | null>(null)
   const voidReport = useVoidDailyReport()
+  const [editing, setEditing] = useState<DailyReport | null>(null)
 
   const filters = {
     page,
@@ -72,6 +75,10 @@ export function DailyReportsPage() {
             <ReportForm onSubmitted={setSubmitted} />
           </div>
         </SectionCard>
+      </Can>
+
+      <Can module="daily_reports" action="export">
+        <PdfDownloadPanel />
       </Can>
 
       <SectionCard
@@ -126,6 +133,14 @@ export function DailyReportsPage() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  onClick={() => setEditing(r)}
+                  aria-label={`Edit report ${r.branch_name} ${r.report_date}`}
+                >
+                  <Pencil aria-hidden /> Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setVoiding(r)}
                   aria-label={`Void report ${r.branch_name} ${r.report_date}`}
                 >
@@ -165,6 +180,8 @@ export function DailyReportsPage() {
           ) : null}
         </div>
       </SectionCard>
+
+      <EditReportDialog report={editing} onOpenChange={(o) => !o && setEditing(null)} />
 
       <ConfirmDialog
         open={voiding !== null}

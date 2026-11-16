@@ -54,6 +54,45 @@ class ProfileRepository(BaseRepository):
         self.session.refresh(profile)
         return profile
 
+    _EDITABLE = ("full_name", "branch_id", "is_active", "must_change_password")
+
+    def update_branch_user(
+        self, user_id: uuid.UUID, values: dict[str, object], reason: str
+    ) -> None:
+        """Owner edit of a Branch User profile (RLS: owner-only update; trigger: no self role/branch/active change).
+        The audit trigger records old/new values, the actor and `reason`. Does NOT commit: the caller commits only
+        after Supabase Auth accepted its part, so the two stay together."""
+        cols = [c for c in self._EDITABLE if c in values]
+        if not cols:
+            return
+        self.session.execute(text("select set_config('app.audit_reason', :r, true)"), {"r": reason})
+        sets = ", ".join(
+            f"{c} = :{c}" for c in cols
+        )  # column names come from the fixed allow-list above
+        self.session.execute(
+            text(f"update public.profiles set {sets} where user_id = :uid and role = 'branch'"),  # noqa: S608
+            {**{c: values[c] for c in cols}, "uid": user_id},
+        )
+        self.session.expire_all()
+
+    def record_user_event(
+        self,
+        user_id: uuid.UUID,
+        event: str,
+        old_email: str | None,
+        new_email: str | None,
+        reason: str,
+    ) -> None:
+        """Activity History entry for an email change / password reset (public.record_user_admin_event). It has no
+        parameter that can carry a password."""
+        self.session.execute(
+            text("select public.record_user_admin_event(:u, :e, :o, :n, :r)"),
+            {"u": user_id, "e": event, "o": old_email, "n": new_email, "r": reason},
+        )
+
+    def commit(self) -> None:
+        self.session.commit()
+
     def complete_password_change(self) -> None:
         """Clear the caller's own must-change flag (SECURITY DEFINER function; touches only auth.uid()'s row)."""
         self.session.execute(text("select app.complete_password_change()"))

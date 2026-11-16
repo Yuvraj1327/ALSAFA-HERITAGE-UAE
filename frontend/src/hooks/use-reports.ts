@@ -7,8 +7,13 @@ import {
 } from '@/services/dashboard.service'
 import {
   createDailyReport,
+  downloadReportsPdf,
+  editDailyReport,
+  getReportHistory,
   listDailyReports,
   voidDailyReport,
+  type PdfParams,
+  type ReportEditPayload,
   type ReportFilters,
   type ReportPayload,
 } from '@/services/reports.service'
@@ -54,6 +59,7 @@ function useInvalidateReporting() {
       qc.invalidateQueries({ queryKey: ['daily-reports'] }),
       qc.invalidateQueries({ queryKey: ['dashboard'] }),
       qc.invalidateQueries({ queryKey: ['branch-date-view'] }),
+      qc.invalidateQueries({ queryKey: ['expenses'] }),
     ])
 }
 
@@ -71,5 +77,37 @@ export function useVoidDailyReport() {
   return useMutation({
     mutationFn: (v: { id: string; reason: string }) => voidDailyReport(v.id, v.reason),
     onSuccess: invalidate,
+  })
+}
+
+export function useEditDailyReport() {
+  const invalidate = useInvalidateReporting()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { id: string; payload: ReportEditPayload }) => editDailyReport(v.id, v.payload),
+    meta: { silent: true }, // the dialog maps field errors itself
+    onSuccess: async () => {
+      await Promise.all([
+        invalidate(),
+        qc.invalidateQueries({ queryKey: ['report-history'] }),
+        qc.invalidateQueries({ queryKey: ['expenses'] }), // the Other Expenses tab reads the same reports
+      ])
+    },
+  })
+}
+
+export function useReportHistory(id: string | null) {
+  return useQuery({
+    queryKey: ['report-history', id],
+    queryFn: () => getReportHistory(id as string),
+    enabled: id !== null,
+    meta: { silent: true },
+  })
+}
+
+export function useDownloadReportsPdf() {
+  return useMutation({
+    mutationFn: (p: PdfParams) => downloadReportsPdf(p),
+    meta: { silent: true },
   })
 }

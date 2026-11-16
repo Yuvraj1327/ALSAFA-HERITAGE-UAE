@@ -1,6 +1,9 @@
+import builtins
 import logging
+import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -9,14 +12,63 @@ from app.api.authz import BranchAccessDeniedError, BranchScope
 from app.core import calculations as calc
 from app.core.exceptions import ConflictError, NotFoundError, UnprocessableError
 from app.repositories.report_repository import ReportRepository
-from app.schemas.reports import DailyReportCreate, DailyReportOut, DailyReportPage
+from app.schemas.reports import (
+    DailyReportCreate,
+    DailyReportEdit,
+    DailyReportOut,
+    DailyReportPage,
+    OtherExpenseOut,
+    ReportHistoryEntry,
+)
+from app.services import report_pdf_service as pdf
 from app.services.base import BaseService
-from app.utils.time import dubai_today
+from app.utils.time import BUSINESS_TZ, dubai_today
 
 logger = logging.getLogger(__name__)
 
+MAX_PDF_DAYS = 366
+MAX_PDF_REPORTS = 1500
+
 # PostgreSQL SQLSTATE codes we translate into API errors
 _UNIQUE, _CHECK, _FK, _RLS = "23505", "23514", "23503", "42501"
+
+
+_HIDDEN = {"id", "created_at", "created_by", "updated_at", "updated_by", "voided_by"}
+_LABELS = {"pos_amount": "POS", "link_payment": "Payment links", "bank_transfer": "Bank transfers"}
+
+
+def _text(v: Any) -> str | None:
+    if v is None or v == "":
+        return None
+    if isinstance(
+        v, float
+    ):  # audit_log jsonb numerics: 600.0 -> "600.00" (money has exactly two places)
+        return f"{Decimal(str(v)):.2f}"
+    if isinstance(v, list):  # other_expenses: "Detergent 12.00; Gas 5.00"
+        return "; ".join(f"{i.get('description')} {i.get('amount')}" for i in v) or None
+    return str(v)
+
+
+def history_entry(r: dict[str, Any]) -> ReportHistoryEntry:
+    """Audit row -> readable before/after list. Only changed, non-bookkeeping fields are listed."""
+    old, new = r["old_values"] or {}, r["new_values"] or {}
+    changes = [
+        {
+            "field": _LABELS.get(k, k.replace("_", " ").capitalize()),
+            "old": _text(old.get(k)),
+            "new": _text(new.get(k)),
+        }
+        for k in new
+        if k not in _HIDDEN and (r["action"] == "INSERT" or old.get(k) != new.get(k))
+    ]
+    return ReportHistoryEntry(
+        id=r["id"],
+        occurred_at=r["occurred_at"],
+        actor_name=r["actor_name"],
+        action=r["action"],
+        reason=r["reason"],
+        changes=changes,
+    )
 
 
 def report_out(row: dict[str, Any]) -> DailyReportOut:
@@ -41,9 +93,18 @@ def report_out(row: dict[str, Any]) -> DailyReportOut:
                 "link_payment",
                 "shop_expenses",
                 "shop_savings",
+                "prepared_by",
                 "created_at",
+                "updated_at",
             )
         },
+        other_expenses=[
+            OtherExpenseOut(description=i["description"], amount=i["amount"], notes=i.get("notes"))
+            for i in (row.get("other_expenses") or [])
+        ],
+        other_expenses_total=calc.money(
+            sum((Decimal(str(i["amount"])) for i in (row.get("other_expenses") or [])), Decimal(0))
+        ),
         total_received=received,
         difference=diff,
         check=calc.check_label(diff),
@@ -127,6 +188,11 @@ class ReportService(BaseService):
             )
         if state == _CHECK:
             message = str(exc.orig).splitlines()[0] if exc.orig else "Report breaks a business rule"
+            if "other_expenses" in message:
+                return UnprocessableError(
+                    "Check the Other expenses",
+                    fields={"other_expenses": [message.split("other_expenses", 1)[1].lstrip(": ")]},
+                )
             if "future" in message:
                 return UnprocessableError(
                     "Report date cannot be in the future (Dubai time)",
@@ -164,6 +230,99 @@ class ReportService(BaseService):
             raise NotFoundError("Report not found")
         scope.ensure(row["branch_id"])
         return report_out(row)
+
+    # ---- PDF export --------------------------------------------------------------------------------------
+    def export_pdf(
+        self,
+        scope: BranchScope,
+        branch_id: uuid.UUID | None,
+        d_from: date,
+        d_to: date,
+        layout: pdf.Layout,
+    ) -> tuple[bytes, str, int]:
+        """(pdf bytes, file name, number of reports). Branch Users are pinned to their own branch by
+        scope.resolve (another branch id -> 403 + audit); the rows themselves come through RLS."""
+        if d_from > d_to:
+            raise UnprocessableError(
+                "Start date is after end date",
+                fields={"date_from": ["Start date must not be after end date"]},
+            )
+        if (d_to - d_from) > timedelta(days=MAX_PDF_DAYS):
+            raise UnprocessableError(
+                f"Choose a date range of at most {MAX_PDF_DAYS} days",
+                fields={"date_to": [f"Range is limited to {MAX_PDF_DAYS} days"]},
+            )
+        branch = scope.resolve(branch_id)
+        rows = self.repo.list_range(branch, d_from, d_to)
+        if len(rows) > MAX_PDF_REPORTS:
+            raise UnprocessableError(
+                f"More than {MAX_PDF_REPORTS} reports match; narrow the branch or the dates"
+            )
+        branch_label = "All Branches"
+        if branch is not None:
+            found = self.repo.get_branch(branch)
+            branch_label = found["name"] if found else "Branch"
+        data = pdf.build_pdf(
+            [report_out(r) for r in rows],
+            layout=layout,
+            branch_label=branch_label,
+            date_from=d_from,
+            date_to=d_to,
+            generated_by=scope.principal.full_name,
+            generated_at=datetime.now(BUSINESS_TZ),
+        )
+        slug = re.sub(r"[^a-z0-9]+", "-", branch_label.lower()).strip("-") or "branch"
+        name = f"alsafa-daily-reports-{slug}-{d_from.isoformat()}"
+        if d_to != d_from:
+            name += f"_{d_to.isoformat()}"
+        suffix = "consolidated" if layout == "consolidated" else "individual"
+        return data, f"{name}-{suffix}.pdf", len(rows)
+
+    # ---- owner edit (audited; original values stay in audit_log) ----------------------------------------
+    def edit(
+        self, report_id: uuid.UUID, body: DailyReportEdit, today: date | None = None
+    ) -> DailyReportOut:
+        today = today or dubai_today()
+        if body.report_date > today:
+            raise UnprocessableError(
+                "Report date cannot be in the future (Dubai time)",
+                fields={
+                    "report_date": [
+                        f"Report date cannot be after today in Dubai ({today.isoformat()})"
+                    ]
+                },
+            )
+        branch = self.repo.get_branch(body.branch_id)
+        if branch is None or not branch["is_active"]:
+            # An unchanged branch may be inactive (a historical report); the database allows that case.
+            current = self.repo.get(report_id)
+            if current is None:
+                raise NotFoundError("Report not found")
+            if current["branch_id"] != body.branch_id:
+                raise UnprocessableError(
+                    "Unknown or inactive branch", fields={"branch_id": ["Select an active branch"]}
+                )
+        try:
+            self.repo.edit(report_id, body.model_dump(mode="python"), body.reason)
+            self.session.commit()
+        except DBAPIError as exc:
+            self.session.rollback()
+            if _sqlstate(exc) == "P0002":
+                raise NotFoundError("Report not found or already voided") from exc
+            if _sqlstate(exc) == _CHECK and "reason" in str(exc.orig):
+                raise UnprocessableError(
+                    "A reason is required", fields={"reason": ["A reason is required"]}
+                ) from exc
+            raise self._translate(exc) from exc
+        row = self.repo.get(report_id)
+        assert row is not None
+        return report_out(row)
+
+    def history(self, report_id: uuid.UUID) -> builtins.list[ReportHistoryEntry]:
+        """Owner only (audit_log RLS). 404 for an unknown or already-voided report."""
+        if self.repo.get(report_id) is None:
+            raise NotFoundError("Report not found")
+        return [history_entry(r) for r in self.repo.history(report_id)]
 
     # ---- owner correction (decision D4: audited void; the database function checks the role again) --------
     def void(self, report_id: uuid.UUID, reason: str) -> None:

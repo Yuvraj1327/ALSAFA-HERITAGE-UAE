@@ -31,7 +31,9 @@ import {
 } from '@/hooks/use-finance'
 import { PAY_ACCOUNTS, type Expense } from '@/schemas/finance'
 import { dubaiToday, formatAED, formatDate } from '@/utils/format'
+import { TabList, TabPanel } from '@/components/common/tabs'
 import { ExpenseDialog } from './ExpenseDialog'
+import { OtherExpensesTab } from './OtherExpensesTab'
 
 const PAGE_SIZE = 25
 const ALL = 'all'
@@ -119,6 +121,7 @@ export function ExpensesPage() {
   const start = balances.data?.tracking_start ?? undefined
   const notConfigured = balances.data?.status === 'not_configured'
 
+  const [tab, setTab] = useState('head-office')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [branch, setBranch] = useState(ALL)
@@ -253,109 +256,123 @@ export function ExpensesPage() {
         </p>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-3" aria-label="Expense totals">
-        <StatCard
-          label="Expenses (excl. savings)"
-          isLoading={list.isLoading}
-          value={totals ? formatAED(totals.excl_savings) : undefined}
-          description="For the current filters"
-        />
-        <StatCard
-          label="Savings"
-          icon={PiggyBank}
-          isLoading={list.isLoading}
-          value={totals ? formatAED(totals.savings) : undefined}
-          description="For the current filters"
-        />
-        <StatCard
-          label="Total paid out"
-          isLoading={list.isLoading}
-          value={totals ? formatAED(totals.total) : undefined}
-          description={totals ? `${totals.count} entries` : undefined}
-        />
-      </div>
-
-      <SectionCard
-        title="Expense list"
-        description="Latest first. Voided entries are hidden from totals."
-      >
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <FormDatePicker
-              label="From"
-              value={from}
-              min={start}
-              max={to || dubaiToday()}
-              onChange={(e) => setFilter(setFrom)(e.target.value)}
-            />
-            <FormDatePicker
-              label="To"
-              value={to}
-              max={dubaiToday()}
-              error={rangeInvalid ? 'Start date must not be after end date' : undefined}
-              onChange={(e) => setFilter(setTo)(e.target.value)}
-            />
-            <FormSelect
-              label="Branch"
-              value={branch}
-              onValueChange={setFilter(setBranch)}
-              options={[
-                { value: ALL, label: 'All' },
-                { value: HEAD_OFFICE, label: 'All-branches entries only' },
-                ...branches.map((b) => ({ value: b.id, label: b.name })),
-              ]}
-            />
-            <FormSelect
-              label="Category"
-              value={category}
-              onValueChange={setFilter(setCategory)}
-              options={[
-                { value: ALL, label: 'All categories' },
-                ...(categories.data ?? []).map((c) => ({ value: c.id, label: c.name })),
-              ]}
-            />
-            <FormSelect
-              label="Paid from"
-              value={source}
-              onValueChange={setFilter(setSource)}
-              options={[
-                { value: ALL, label: 'All sources' },
-                ...PAY_ACCOUNTS.map((a) => ({ value: a, label: a })),
-              ]}
-            />
-            <FormSelect
-              label="Saving"
-              value={saving}
-              onValueChange={setFilter(setSaving)}
-              options={[
-                { value: ALL, label: 'Expenses and savings' },
-                { value: 'yes', label: 'Savings only' },
-                { value: 'no', label: 'Expenses only' },
-              ]}
-            />
-          </div>
-          <DataTable
-            caption="Head office expenses"
-            rows={rangeInvalid ? [] : list.data?.items}
+      <TabList
+        label="Expense views"
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: 'head-office', label: 'Head office expenses' },
+          { value: 'other', label: 'Other Expenses' },
+        ]}
+      />
+      <TabPanel value="other" active={tab === 'other'}>
+        <OtherExpensesTab />
+      </TabPanel>
+      <TabPanel value="head-office" active={tab === 'head-office'}>
+        <div className="grid gap-4 sm:grid-cols-3" aria-label="Expense totals">
+          <StatCard
+            label="Expenses (excl. savings)"
             isLoading={list.isLoading}
-            error={list.error}
-            onRetry={() => void list.refetch()}
-            getRowId={(r) => r.id}
-            columns={columns}
-            emptyTitle="No expenses match these filters"
-            emptyDescription="Record a head office expense with New expense."
+            value={totals ? formatAED(totals.excl_savings) : undefined}
+            description="For the current filters"
           />
-          {list.data ? (
-            <Pagination
-              page={list.data.page}
-              pageSize={list.data.page_size}
-              total={list.data.total}
-              noun="expenses"
-              onPage={setPage}
-            />
-          ) : null}
+          <StatCard
+            label="Savings"
+            icon={PiggyBank}
+            isLoading={list.isLoading}
+            value={totals ? formatAED(totals.savings) : undefined}
+            description="For the current filters"
+          />
+          <StatCard
+            label="Total paid out"
+            isLoading={list.isLoading}
+            value={totals ? formatAED(totals.total) : undefined}
+            description={totals ? `${totals.count} entries` : undefined}
+          />
         </div>
-      </SectionCard>
+
+        <SectionCard
+          title="Expense list"
+          description="Latest first. Voided entries are hidden from totals."
+        >
+          <div className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <FormDatePicker
+                label="From"
+                value={from}
+                min={start}
+                max={to || dubaiToday()}
+                onChange={(e) => setFilter(setFrom)(e.target.value)}
+              />
+              <FormDatePicker
+                label="To"
+                value={to}
+                max={dubaiToday()}
+                error={rangeInvalid ? 'Start date must not be after end date' : undefined}
+                onChange={(e) => setFilter(setTo)(e.target.value)}
+              />
+              <FormSelect
+                label="Branch"
+                value={branch}
+                onValueChange={setFilter(setBranch)}
+                options={[
+                  { value: ALL, label: 'All' },
+                  { value: HEAD_OFFICE, label: 'All-branches entries only' },
+                  ...branches.map((b) => ({ value: b.id, label: b.name })),
+                ]}
+              />
+              <FormSelect
+                label="Category"
+                value={category}
+                onValueChange={setFilter(setCategory)}
+                options={[
+                  { value: ALL, label: 'All categories' },
+                  ...(categories.data ?? []).map((c) => ({ value: c.id, label: c.name })),
+                ]}
+              />
+              <FormSelect
+                label="Paid from"
+                value={source}
+                onValueChange={setFilter(setSource)}
+                options={[
+                  { value: ALL, label: 'All sources' },
+                  ...PAY_ACCOUNTS.map((a) => ({ value: a, label: a })),
+                ]}
+              />
+              <FormSelect
+                label="Saving"
+                value={saving}
+                onValueChange={setFilter(setSaving)}
+                options={[
+                  { value: ALL, label: 'Expenses and savings' },
+                  { value: 'yes', label: 'Savings only' },
+                  { value: 'no', label: 'Expenses only' },
+                ]}
+              />
+            </div>
+            <DataTable
+              caption="Head office expenses"
+              rows={rangeInvalid ? [] : list.data?.items}
+              isLoading={list.isLoading}
+              error={list.error}
+              onRetry={() => void list.refetch()}
+              getRowId={(r) => r.id}
+              columns={columns}
+              emptyTitle="No expenses match these filters"
+              emptyDescription="Record a head office expense with New expense."
+            />
+            {list.data ? (
+              <Pagination
+                page={list.data.page}
+                pageSize={list.data.page_size}
+                total={list.data.total}
+                noun="expenses"
+                onPage={setPage}
+              />
+            ) : null}
+          </div>
+        </SectionCard>
+      </TabPanel>
 
       <ExpenseDialog open={formOpen} onOpenChange={setFormOpen} expense={editing} minDate={start} />
       <ExpenseDetails id={detailId} onClose={() => setDetailId(null)} />

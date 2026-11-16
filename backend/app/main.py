@@ -49,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=False,  # bearer tokens in headers, no cookies
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "Content-Disposition"],
         max_age=600,
     )
 

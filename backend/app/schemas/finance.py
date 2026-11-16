@@ -268,6 +268,29 @@ class ExpensePage(BaseModel):
     totals: ExpenseTotals
 
 
+class OtherExpenseRow(BaseModel):
+    """One itemised "Other" shop expense, read from the daily report that holds it (no separate ledger)."""
+
+    id: str  # "<report id>:<item number>"
+    report_id: uuid.UUID
+    expense_date: date
+    branch_id: uuid.UUID
+    branch_name: str
+    description: str
+    amount: Money
+    notes: str | None
+    recorded_by: str | None
+    recorded_at: datetime
+
+
+class OtherExpensePage(BaseModel):
+    items: list[OtherExpenseRow]
+    total: int
+    page: int
+    page_size: int
+    total_amount: Money  # sum of ALL matching items, not just this page
+
+
 class ExpenseDetail(BaseModel):
     expense: ExpenseOut
     history: list[AuditEntry]

@@ -24,7 +24,9 @@ class UserAdminAction(StrEnum):
     DEACTIVATE = "deactivate"
     VIEW_PROFILE = "view_profile"
     UPDATE_PROFILE = "update_profile"  # display name etc. -- NOT role/branch/active
-    RESET_ACCESS = "reset_access"  # triggers the authorized reset process (password email); never sets a password
+    RESET_ACCESS = (
+        "reset_access"  # Owner sets a new password / changes the sign-in email of a Branch User
+    )
 
 
 _MODULE_ACTION: dict[UserAdminAction, Action] = {

@@ -73,6 +73,13 @@ export const useExpenses = (f: api.ExpenseFilters) =>
     placeholderData: keepPreviousData,
     ...q,
   })
+export const useOtherExpenses = (f: api.OtherExpenseFilters) =>
+  useQuery({
+    queryKey: ['expenses', 'other', f],
+    queryFn: () => api.listOtherExpenses(f),
+    placeholderData: keepPreviousData,
+    ...q,
+  })
 export const useCategories = () =>
   useQuery({
     queryKey: ['expenses', 'categories'],

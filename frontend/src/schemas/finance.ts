@@ -377,3 +377,25 @@ export function dueFormSchema(opts: { today: string; minDate?: string }) {
 }
 export type DueFormInput = z.input<ReturnType<typeof dueFormSchema>>
 export type DueFormValues = z.output<ReturnType<typeof dueFormSchema>>
+
+/* ---------- Other shop expenses (read from daily reports; no second ledger) ---------- */
+export const otherExpenseRowSchema = z.object({
+  id: z.string(),
+  report_id: z.string(),
+  expense_date: z.string(),
+  branch_id: z.string(),
+  branch_name: z.string(),
+  description: z.string(),
+  amount: z.string(),
+  notes: z.string().nullable(),
+  recorded_by: z.string().nullable(),
+  recorded_at: z.string(),
+})
+export type OtherExpenseRow = z.infer<typeof otherExpenseRowSchema>
+export const otherExpensePageSchema = z.object({
+  items: z.array(otherExpenseRowSchema),
+  total: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+  total_amount: z.string(),
+})

@@ -61,5 +61,8 @@ def pg_admin_dsn():
 
 @pytest.fixture(scope="session")
 def app_api_url(pg_admin_dsn: str) -> str:
-    dbname = pg_admin_dsn.split("dbname=")[1]
-    return f"postgresql://app_api:{APP_API_PASSWORD}@/{dbname}?host=/tmp&port=54329"
+    parts = dict(kv.split("=", 1) for kv in pg_admin_dsn.split())
+    dbname = parts["dbname"]
+    host = parts.get("host", "/tmp")
+    port = parts.get("port", "5432")
+    return f"postgresql://app_api:{APP_API_PASSWORD}@/{dbname}?host={host}&port={port}"

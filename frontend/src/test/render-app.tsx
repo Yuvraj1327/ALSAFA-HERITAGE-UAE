@@ -37,7 +37,7 @@ const OWNER_PERMS = Object.fromEntries(
 const BRANCH_PERMS = {
   dashboard: { actions: ['read'], scope: 'own_branch' },
   branch_management: { actions: ['read'], scope: 'own_branch' },
-  daily_reports: { actions: ['create', 'read'], scope: 'own_branch' },
+  daily_reports: { actions: ['create', 'export', 'read'], scope: 'own_branch' },
   orders: { actions: ['create', 'export', 'read', 'update'], scope: 'own_branch' },
   customers: { actions: ['create', 'read', 'update'], scope: 'own_branch' },
   order_payments: { actions: ['create', 'read'], scope: 'own_branch' },

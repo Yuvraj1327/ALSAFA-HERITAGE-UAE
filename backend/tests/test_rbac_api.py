@@ -387,7 +387,9 @@ def test_09_owner_user_listing_excludes_secrets(client, key, owner) -> None:
         "branch_id",
         "is_active",
         "created_at",
+        "email",  # always null in the list; only GET /users/{id} reads it (never a password)
     }
+    assert body[0]["email"] is None
 
 
 def test_11_denials_are_403_json_with_request_id(client, key, main_user) -> None:
@@ -438,13 +440,28 @@ def test_12_list_is_scoped(client, key, main_user, jernas_user, users) -> None:
 
 # ---- 13/14. submitted reports cannot be edited or deleted -------------------------------------------------
 def test_13_14_no_edit_or_delete_route_exists(client, key, main_user, owner, users) -> None:
+    """Nobody can PATCH/DELETE a report. PUT is the Owner-only audited edit: Branch Users are refused (403)."""
     rid = users.report("ALSAFA MAIN")
     for who in (main_user, owner):
         for method in ("PUT", "PATCH", "DELETE"):
-            for path in (f"/__test/reports/{rid}", f"/api/v1/daily-reports/{rid}"):
-                assert client.request(
-                    method, path, headers=hdr(key, who), json={"total_sales": 1}
-                ).status_code in (404, 405)
+            path = f"/__test/reports/{rid}"
+            assert client.request(
+                method, path, headers=hdr(key, who), json={"total_sales": 1}
+            ).status_code in (404, 405)
+        for method in ("PATCH", "DELETE"):
+            assert (
+                client.request(
+                    method,
+                    f"/api/v1/daily-reports/{rid}",
+                    headers=hdr(key, who),
+                    json={"total_sales": 1},
+                ).status_code
+                == 405
+            )
+    r = client.put(
+        f"/api/v1/daily-reports/{rid}", headers=hdr(key, main_user), json={"total_sales": 1}
+    )
+    assert r.status_code == 403  # Branch User: no UPDATE permission on daily reports
 
 
 def test_13_14_database_refuses_edit_and_delete_even_through_the_api_role(
@@ -550,7 +567,7 @@ def test_profile_includes_permission_slice(client, key, owner, main_user) -> Non
         "customers",
         "order_payments",
     }
-    assert b["daily_reports"] == {"actions": ["create", "read"], "scope": "own_branch"}
+    assert b["daily_reports"] == {"actions": ["create", "export", "read"], "scope": "own_branch"}
 
 
 # ---- audit of failed privileged access ---------------------------------------------------------------------------

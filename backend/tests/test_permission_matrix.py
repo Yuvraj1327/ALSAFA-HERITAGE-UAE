@@ -63,6 +63,7 @@ def test_branch_user_allowed_set_is_exactly_this() -> None:
         (Module.BRANCH_MANAGEMENT, Action.READ),
         (Module.DAILY_REPORTS, Action.READ),
         (Module.DAILY_REPORTS, Action.CREATE),
+        (Module.DAILY_REPORTS, Action.EXPORT),  # own-branch PDF download (scope is OWN_BRANCH)
         # Step 13 (customer orders), own branch; no cancel / refund / delete. Assumption O1 awaits Owner approval.
         (Module.ORDERS, Action.READ),
         (Module.ORDERS, Action.CREATE),
@@ -77,9 +78,7 @@ def test_branch_user_allowed_set_is_exactly_this() -> None:
     assert all(g.scope is Scope.OWN_BRANCH for g in PERMISSION_MATRIX[Role.BRANCH_USER].values())
 
 
-@pytest.mark.parametrize(
-    "action", [Action.UPDATE, Action.DELETE, Action.EXPORT, Action.APPROVE, Action.MANAGE]
-)
+@pytest.mark.parametrize("action", [Action.UPDATE, Action.DELETE, Action.APPROVE, Action.MANAGE])
 def test_branch_user_cannot_modify_reports_or_manage(action: Action) -> None:
     assert not can(Role.BRANCH_USER, Module.DAILY_REPORTS, action)
     assert not can(Role.BRANCH_USER, Module.BRANCH_MANAGEMENT, action)
@@ -106,7 +105,7 @@ def test_unknown_role_gets_nothing(bad: object) -> None:
 
 def test_permissions_payload_shape() -> None:
     p = permissions_for("branch")
-    assert p["daily_reports"] == {"actions": ["create", "read"], "scope": "own_branch"}
+    assert p["daily_reports"] == {"actions": ["create", "export", "read"], "scope": "own_branch"}
     assert "suppliers" not in p and "user_management" not in p
 
 

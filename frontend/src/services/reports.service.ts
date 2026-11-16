@@ -1,6 +1,6 @@
 import { apiClient } from '@/lib/api-client'
-import { dailyReportPageSchema, dailyReportSchema } from '@/schemas/reports'
-import type { DailyReport, DailyReportPage } from '@/schemas/reports'
+import { dailyReportPageSchema, dailyReportSchema, reportHistorySchema } from '@/schemas/reports'
+import type { DailyReport, DailyReportPage, ReportHistoryEntry } from '@/schemas/reports'
 
 export interface ReportPayload {
   report_date: string
@@ -13,6 +13,22 @@ export interface ReportPayload {
   link_payment: string
   shop_expenses: string
   shop_savings: string
+  /** shop_expenses is the TOTAL; these items are the "Other" part of it. */
+  other_expenses?: { description: string; amount: string; notes?: string }[]
+}
+
+export interface ReportEditPayload extends Omit<ReportPayload, 'branch_id' | 'other_expenses'> {
+  branch_id: string
+  other_expenses: { description: string; amount: string; notes?: string }[]
+  reason: string
+}
+
+export type PdfLayout = 'individual' | 'consolidated'
+export interface PdfParams {
+  date_from: string
+  date_to?: string
+  branch_id?: string
+  layout: PdfLayout
 }
 
 export interface ReportFilters {
@@ -35,4 +51,39 @@ export async function listDailyReports(filters: ReportFilters): Promise<DailyRep
 
 export async function voidDailyReport(id: string, reason: string): Promise<void> {
   await apiClient.post(`/daily-reports/${id}/void`, { reason })
+}
+
+export async function editDailyReport(
+  id: string,
+  payload: ReportEditPayload,
+): Promise<DailyReport> {
+  const { data } = await apiClient.put<unknown>(`/daily-reports/${id}`, payload)
+  return dailyReportSchema.parse(data)
+}
+
+export async function getReportHistory(id: string): Promise<ReportHistoryEntry[]> {
+  const { data } = await apiClient.get<unknown>(`/daily-reports/${id}/history`)
+  return reportHistorySchema.parse(data)
+}
+
+/** Downloads the PDF through the authenticated client (the browser cannot send the token on a plain link). */
+export async function downloadReportsPdf(params: PdfParams): Promise<string> {
+  const res = await apiClient.get<Blob>('/daily-reports/export/pdf', {
+    params,
+    responseType: 'blob',
+    timeout: 60_000,
+  })
+  const header = String(res.headers?.['content-disposition'] ?? '')
+  const name =
+    /filename="?([^";]+)"?/.exec(header)?.[1] ??
+    `alsafa-daily-reports-${params.date_from}${params.date_to ? `_${params.date_to}` : ''}-${params.layout}.pdf`
+  const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  return name
 }

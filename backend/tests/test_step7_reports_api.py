@@ -275,7 +275,7 @@ def test_no_edit_or_delete_routes_exist(client, key, owner, main_user) -> None:
     rid = client.post(
         f"{API}/daily-reports", json=body(date(2026, 4, 13)), headers=h(key, main_user)
     ).json()["id"]
-    for method in ("PUT", "PATCH", "DELETE"):
+    for method in ("PATCH", "DELETE"):
         for who in (owner, main_user):
             assert (
                 client.request(
@@ -286,6 +286,11 @@ def test_no_edit_or_delete_routes_exist(client, key, owner, main_user) -> None:
                 ).status_code
                 == 405
             )
+    # PUT is the Owner-only audited edit (tests/test_owner_edit_pdf_other.py); a Branch User is refused.
+    r = client.put(
+        f"{API}/daily-reports/{rid}", headers=h(key, main_user), json=body(date(2026, 4, 13))
+    )
+    assert r.status_code == 403
 
 
 # ---- list / get isolation -----------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { Plus, Users } from 'lucide-react'
+import { Pencil, Plus, Users } from 'lucide-react'
 import { useState } from 'react'
 import { Can } from '@/auth/permission-guards'
 import { DataTable, type DataTableColumn } from '@/components/common/data-table'
@@ -10,12 +10,14 @@ import { useUsers } from '@/hooks/use-users'
 import type { UserProfile } from '@/schemas/users'
 import { formatDateTime } from '@/utils/format'
 import { roleLabel } from '@/utils/user'
+import { EditUserDialog } from './EditUserDialog'
 import { UserDialog } from './UserDialog'
 
-/** Owner-only user list; Owners can add Branch Users (POST /users). Editing/deactivating is an operator task. */
+/** Owner-only user list; Owners can add and edit Branch Users (POST/PATCH /users). */
 export function UsersPage() {
   const users = useUsers()
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<UserProfile | null>(null)
   const branches = useBranches()
   const branchName = (id: string | null) =>
     id ? (branches.data?.find((b) => b.id === id)?.name ?? '—') : 'All branches'
@@ -37,6 +39,23 @@ export function UsersPage() {
       ),
     },
     { key: 'created', header: 'Created', cell: (u) => formatDateTime(u.created_at) },
+    {
+      key: 'actions',
+      header: 'Actions',
+      cell: (u) =>
+        u.role === 'branch' ? (
+          <Can module="user_management" action="update">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setEditing(u)}
+              aria-label={`Edit user ${u.full_name}`}
+            >
+              <Pencil aria-hidden /> Edit
+            </Button>
+          </Can>
+        ) : null,
+    },
   ]
   return (
     <PageContainer
@@ -62,6 +81,7 @@ export function UsersPage() {
         emptyTitle="No users found"
       />
       <UserDialog open={adding} onOpenChange={setAdding} />
+      <EditUserDialog user={editing} onOpenChange={(o) => !o && setEditing(null)} />
     </PageContainer>
   )
 }

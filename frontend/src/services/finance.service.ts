@@ -10,6 +10,7 @@ import {
   expenseSchema,
   ledgerPageSchema,
   openingBalancesSchema,
+  otherExpensePageSchema,
   settlementSchema,
   supplierEntryPageSchema,
   supplierEntrySchema,
@@ -191,3 +192,14 @@ export const addSupplierDue = (
   id: string,
   p: { entry_date: string; amount: string; reference?: string; note?: string; client_key: string },
 ) => send('post', `/suppliers/${id}/dues`, supplierEntrySchema, p)
+
+export interface OtherExpenseFilters {
+  date_from?: string
+  date_to?: string
+  branch_id?: string
+  q?: string
+  page: number
+  page_size: number
+}
+export const listOtherExpenses = (f: OtherExpenseFilters) =>
+  get('/expenses/other', otherExpensePageSchema, { ...f })

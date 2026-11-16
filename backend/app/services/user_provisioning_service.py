@@ -24,15 +24,18 @@ from app.core.config import Settings
 from app.core.exceptions import (
     AppError,
     ConflictError,
+    NotFoundError,
     ServiceUnavailableError,
     UnprocessableError,
 )
+from app.core.passwords import validate_new_password
 from app.core.permissions import Principal, Role
 from app.models.profile import Profile
 from app.repositories.profile_repository import ProfileRepository
-from app.schemas.rbac import UserCreate
+from app.schemas.rbac import UserCreate, UserUpdate
 from app.services.user_admin_policy import (
     InvalidUserChange,
+    TargetUser,
     UserAdminAction,
     authorize_user_change,
 )
@@ -106,6 +109,30 @@ class SupabaseAuthAdmin:
             json={"password": password},
         )
 
+    def get_email(self, user_id: uuid.UUID) -> str | None:
+        """The account's sign-in email (never a password: Supabase does not expose one)."""
+        body = self._call("GET", f"{self.base}/admin/users/{user_id}", "reading the user")
+        email = body.get("email")
+        return str(email) if email else None
+
+    def update_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        email: str | None = None,
+        password: str | None = None,
+        email_confirmed: bool = True,
+    ) -> None:
+        payload: dict[str, Any] = {}
+        if email is not None:
+            payload.update(email=email, email_confirm=email_confirmed)
+        if password is not None:
+            payload["password"] = password
+        if payload:
+            self._call(
+                "PUT", f"{self.base}/admin/users/{user_id}", "updating the user", json=payload
+            )
+
     def delete_user(self, user_id: uuid.UUID) -> None:
         self._call("DELETE", f"{self.base}/admin/users/{user_id}", "removing the user")
 
@@ -164,6 +191,115 @@ class UserProvisioningService:
             self.profiles.session.rollback()
             self._compensate(admin, user_id)
             raise
+
+    def read_email(self, user_id: uuid.UUID) -> str | None:
+        """Email for the Owner's edit form; None when the server has no Auth admin access (the form then hides it)."""
+        try:
+            return build_auth_admin(self.settings, self.transport).get_email(user_id)
+        except (ProvisioningNotConfiguredError, AuthProviderError):
+            return None
+
+    def update_branch_user(self, actor: Principal, user_id: uuid.UUID, data: UserUpdate) -> Profile:
+        """Owner edit: name, email, branch, active status and/or a new password.
+
+        Database changes are made first but only committed after Supabase Auth accepted the email/password change,
+        so a rejected email (duplicate) or weak password leaves everything untouched. If the final commit fails
+        after the email was changed, the email is put back. Passwords exist only in this call's memory."""
+        authorize_user_change(
+            actor, UserAdminAction.UPDATE_PROFILE
+        )  # module-level permission first
+        profile = self.profiles.get(user_id)
+        if profile is None:
+            raise NotFoundError("User not found")
+        role = Role(profile.role)
+        target = TargetUser(profile.user_id, role, profile.is_active)
+        if role is not Role.BRANCH_USER:
+            raise InvalidUserChange("Only Branch User accounts can be edited here.")
+
+        values: dict[str, object] = {}
+        if data.full_name is not None and data.full_name != profile.full_name:
+            values["full_name"] = data.full_name
+        if data.branch_id is not None and data.branch_id != profile.branch_id:
+            authorize_user_change(
+                actor, UserAdminAction.ASSIGN_BRANCH, target, new_branch_id=data.branch_id
+            )
+            if not self.profiles.branch_exists_active(data.branch_id):
+                raise InvalidUserChange("Choose an existing, active branch.")
+            values["branch_id"] = data.branch_id
+        if data.is_active is not None and data.is_active != profile.is_active:
+            authorize_user_change(
+                actor,
+                UserAdminAction.ACTIVATE if data.is_active else UserAdminAction.DEACTIVATE,
+                target,
+            )
+            values["is_active"] = data.is_active
+
+        new_password = data.password.get_secret_value() if data.password else None
+        wants_email = data.email is not None
+        if wants_email or new_password is not None:
+            authorize_user_change(actor, UserAdminAction.RESET_ACCESS, target)
+        if not values and not wants_email and new_password is None:
+            raise InvalidUserChange("Nothing to change.")
+
+        admin = (
+            build_auth_admin(self.settings, self.transport)
+            if (wants_email or new_password)
+            else None
+        )
+        old_email = new_email = None
+        if admin is not None:
+            old_email = admin.get_email(user_id)
+            if data.email is not None and data.email != old_email:
+                new_email = data.email
+            if new_password is not None:
+                try:
+                    validate_new_password(new_password, new_email or old_email)
+                except ValueError as exc:
+                    raise UnprocessableError(
+                        "The password was not accepted.", fields={"password": [str(exc)]}
+                    ) from None
+            if new_email is None and new_password is None and not values:
+                raise InvalidUserChange("Nothing to change.")
+        if new_password is not None:
+            values["must_change_password"] = (
+                True  # the Owner knows it: the user must choose their own
+            )
+
+        reason = "Updated by Owner"
+        try:
+            self.profiles.update_branch_user(user_id, values, reason)
+            if admin is not None and (new_email is not None or new_password is not None):
+                admin.update_user(
+                    user_id,
+                    email=new_email,
+                    password=new_password,
+                    email_confirmed=self.settings.provision_email_confirmed,
+                )
+            if new_email is not None:
+                self.profiles.record_user_event(
+                    user_id, "email_changed", old_email, new_email, reason
+                )
+            if new_password is not None:
+                self.profiles.record_user_event(user_id, "password_reset", None, None, reason)
+            self.profiles.commit()
+        except BaseException:
+            self.profiles.session.rollback()
+            if admin is not None and new_email is not None and old_email:
+                # Only matters if the Auth change succeeded and the commit then failed: restore the email.
+                try:
+                    admin.update_user(
+                        user_id,
+                        email=old_email,
+                        email_confirmed=self.settings.provision_email_confirmed,
+                    )
+                except AppError:
+                    logger.error(
+                        "could not restore the email of user %s after a failed edit", user_id
+                    )
+            raise
+        refreshed = self.profiles.get(user_id)
+        assert refreshed is not None
+        return refreshed
 
     @staticmethod
     def _compensate(admin: SupabaseAuthAdmin, user_id: uuid.UUID) -> None:

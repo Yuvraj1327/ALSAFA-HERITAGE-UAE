@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -11,7 +12,7 @@ Row = dict[str, Any]
 
 _REPORT_COLS = """r.id, r.report_date, r.branch_id, b.name as branch_name, r.total_sales, r.order_count,
        r.cash_received, r.pos_amount, r.bank_transfer, r.link_payment, r.shop_expenses, r.shop_savings,
-       r.created_at"""
+       r.other_expenses, app.profile_display_name(r.created_by) as prepared_by, r.created_at, r.updated_at"""
 _REPORT_FROM = "from public.daily_reports r join public.branches b on b.id = r.branch_id"
 _ACTIVE = "r.voided_at is null"
 _BRANCH_FILTER = "(cast(:b as uuid) is null or r.branch_id = cast(:b as uuid))"
@@ -20,6 +21,18 @@ _SUMS = """count(*) as report_count,
        coalesce(sum(r.cash_received), 0) as cash_received, coalesce(sum(r.pos_amount), 0) as pos_amount,
        coalesce(sum(r.bank_transfer), 0) as bank_transfer, coalesce(sum(r.link_payment), 0) as link_payment,
        coalesce(sum(r.shop_expenses), 0) as shop_expenses, coalesce(sum(r.shop_savings), 0) as shop_savings"""
+
+
+def other_json(items: list[Any] | None) -> str:
+    """Other-expense items as the jsonb stored on the report (amounts as exact 2-place strings)."""
+    out = []
+    for i in items or []:
+        d = i if isinstance(i, dict) else i.model_dump(mode="python")
+        item: dict[str, Any] = {"description": d["description"], "amount": f"{d['amount']:.2f}"}
+        if d.get("notes"):
+            item["notes"] = d["notes"]
+        out.append(item)
+    return json.dumps(out)
 
 
 class ReportRepository(BaseRepository):
@@ -31,8 +44,8 @@ class ReportRepository(BaseRepository):
             text(
                 """insert into public.daily_reports
                      (report_date, branch_id, total_sales, order_count, cash_received, pos_amount,
-                      bank_transfer, link_payment, shop_expenses, shop_savings)
-                   values (:d, :b, :ts, :oc, :cash, :pos, :bt, :lp, :se, :ss) returning id"""
+                      bank_transfer, link_payment, shop_expenses, shop_savings, other_expenses)
+                   values (:d, :b, :ts, :oc, :cash, :pos, :bt, :lp, :se, :ss, cast(:oe as jsonb)) returning id"""
             ),
             {
                 "d": report_date,
@@ -45,6 +58,7 @@ class ReportRepository(BaseRepository):
                 "lp": v["link_payment"],
                 "se": v["shop_expenses"],
                 "ss": v["shop_savings"],
+                "oe": other_json(v.get("other_expenses")),
             },
         ).one()
         return row[0]  # type: ignore[no-any-return]
@@ -99,6 +113,38 @@ class ReportRepository(BaseRepository):
                     " order by r.report_date desc, b.sort_order"
                 ),
                 {"b": branch, "f": d_from, "t": d_to},
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(r) for r in rows]
+
+    def edit(self, report_id: uuid.UUID, v: dict[str, Any], reason: str) -> None:
+        """Owner correction through public.edit_daily_report (owner check, row lock and audit reason live there)."""
+        self.session.execute(
+            text(
+                "select public.edit_daily_report(:i, :d, :b, :ts, :oc, :cash, :pos, :bt, :lp, :se, :ss,"
+                " cast(:oe as jsonb), :r)"
+            ),
+            {
+                "i": report_id, "d": v["report_date"], "b": v["branch_id"], "ts": v["total_sales"],
+                "oc": v["order_count"], "cash": v["cash_received"], "pos": v["pos_amount"],
+                "bt": v["bank_transfer"], "lp": v["link_payment"], "se": v["shop_expenses"],
+                "ss": v["shop_savings"], "oe": other_json(v.get("other_expenses")), "r": reason,
+            },
+        )  # fmt: skip
+
+    def history(self, report_id: uuid.UUID, limit: int = 100) -> list[Row]:
+        rows = (
+            self.session.execute(
+                text(
+                    """select a.id, a.occurred_at, p.full_name as actor_name, a.action, a.reason,
+                              a.old_values, a.new_values
+                         from public.audit_log a left join public.profiles p on p.user_id = a.actor_user_id
+                        where a.table_name = 'daily_reports' and a.record_id = :r
+                        order by a.id desc limit :n"""
+                ),
+                {"r": str(report_id), "n": limit},
             )
             .mappings()
             .all()

@@ -14,6 +14,7 @@ from app.schemas.finance import (
     ExpenseIn,
     ExpenseOut,
     ExpensePage,
+    OtherExpensePage,
     SavingIn,
     VoidIn,
 )
@@ -28,6 +29,24 @@ Update = Annotated[object, Depends(require_permission(Module.EXPENSES, Action.UP
 @router.get("/categories", response_model=list[ExpenseCategoryOut], summary="Expense categories")
 def categories(session: DbSession, _p: Read) -> list[ExpenseCategoryOut]:
     return ExpenseService(session).categories()
+
+
+@router.get(
+    "/other",
+    response_model=OtherExpensePage,
+    summary='Itemised "Other" shop expenses from submitted daily reports (Owner)',
+)
+def list_other_expenses(
+    session: DbSession,
+    _p: Read,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    branch_id: uuid.UUID | None = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    page: Annotated[int, Query(ge=1, le=100000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> OtherExpensePage:
+    return ExpenseService(session).other_expenses(date_from, date_to, branch_id, q, page, page_size)
 
 
 @router.get("", response_model=ExpensePage, summary="Head office expenses (filters + pagination)")

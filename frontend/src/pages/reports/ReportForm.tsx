@@ -16,18 +16,11 @@ import {
   type DailyReport,
   type ReportFormInput,
   type ReportFormValues,
+  shopExpensesTotal,
 } from '@/schemas/reports'
 import type { ReportPayload } from '@/services/reports.service'
+import { ReportAmountFields } from './ReportFields'
 import { dubaiToday, formatAED, formatDate } from '@/utils/format'
-
-const AMOUNT_FIELDS = [
-  ['cash_received', 'Cash'],
-  ['pos_amount', 'POS'],
-  ['bank_transfer', 'Bank Transfers'],
-  ['link_payment', 'Payment Links'],
-  ['shop_expenses', 'Shop Expenses'],
-  ['shop_savings', 'Savings'],
-] as const
 
 type FieldName = keyof ReportFormInput
 
@@ -42,6 +35,8 @@ const blank = (date: string, branch: string): ReportFormInput => ({
   link_payment: '',
   shop_expenses: '',
   shop_savings: '',
+  other_expenses: [],
+  reason: '',
 })
 
 export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => void }) {
@@ -76,8 +71,14 @@ export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => v
       pos_amount: values.pos_amount,
       bank_transfer: values.bank_transfer,
       link_payment: values.link_payment,
-      shop_expenses: values.shop_expenses,
+      // shop_expenses is the TOTAL (regular + Other items); the items are sent as its breakdown.
+      shop_expenses: shopExpensesTotal(values.shop_expenses, values.other_expenses),
       shop_savings: values.shop_savings,
+      other_expenses: values.other_expenses.map((i) => ({
+        description: i.description,
+        amount: i.amount,
+        ...(i.notes ? { notes: i.notes } : {}),
+      })),
     }
     try {
       const report = await create.mutateAsync(payload)
@@ -179,19 +180,7 @@ export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => v
         />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {AMOUNT_FIELDS.map(([name, label]) => (
-          <FormInput
-            key={name}
-            label={`${label} (AED)`}
-            inputMode="decimal"
-            autoComplete="off"
-            placeholder="0.00"
-            error={errors[name]}
-            {...form.register(name)}
-          />
-        ))}
-      </div>
+      <ReportAmountFields form={form as never} />
 
       <FormActions
         submitLabel="Review & submit"
@@ -230,9 +219,10 @@ export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => v
                 <dd className="font-medium">{formatAED(draft.total_sales)}</dd>
                 <dt className="text-muted-foreground">Collections entered</dt>
                 <dd className="font-medium">{formatAED(received)}</dd>
-                <dt className="text-muted-foreground">Shop Expenses / Savings</dt>
+                <dt className="text-muted-foreground">Shop Expenses (incl. Other) / Savings</dt>
                 <dd className="font-medium">
-                  {formatAED(draft.shop_expenses)} / {formatAED(draft.shop_savings)}
+                  {formatAED(shopExpensesTotal(draft.shop_expenses, draft.other_expenses))} /{' '}
+                  {formatAED(draft.shop_savings)}
                 </dd>
               </dl>
             </div>

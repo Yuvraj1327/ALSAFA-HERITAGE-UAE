@@ -15,6 +15,8 @@ from app.schemas.finance import (
     ExpenseOut,
     ExpensePage,
     ExpenseTotals,
+    OtherExpensePage,
+    OtherExpenseRow,
 )
 from app.services.finance_core import FinanceCore
 
@@ -84,6 +86,35 @@ class ExpenseService(FinanceCore):
                 excl_savings=calc.head_office_excl_savings(total, savings),
                 count=int(agg["active"]),
             ),
+        )
+
+    def other_expenses(
+        self,
+        d_from: date | None,
+        d_to: date | None,
+        branch: uuid.UUID | None,
+        q: str | None,
+        page: int,
+        page_size: int,
+    ) -> OtherExpensePage:
+        if d_from and d_to and d_from > d_to:
+            raise UnprocessableError(
+                "Start date is after end date",
+                fields={"date_from": ["Start date must not be after end date"]},
+            )
+        f = {"d_from": d_from, "d_to": d_to, "branch": branch, "q": (q or "").strip() or None}
+        rows, agg = self.fin.other_expenses_page(f, page_size, (page - 1) * page_size)
+        return OtherExpensePage(
+            items=[
+                OtherExpenseRow(
+                    id=f"{r['report_id']}:{r['n']}", **{k: v for k, v in r.items() if k != "n"}
+                )
+                for r in rows
+            ],
+            total=int(agg["n"]),
+            page=page,
+            page_size=page_size,
+            total_amount=money(agg["total"]),
         )
 
     def get(self, id_: uuid.UUID) -> ExpenseDetail:

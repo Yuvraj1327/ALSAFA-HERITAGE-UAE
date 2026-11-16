@@ -8,7 +8,7 @@ from app.api.deps import DbSession
 from app.core.exceptions import NotFoundError
 from app.core.permissions import Action, Module, Principal
 from app.repositories.profile_repository import ProfileRepository
-from app.schemas.rbac import UserCreate, UserOut
+from app.schemas.rbac import UserCreate, UserOut, UserUpdate
 from app.services.user_provisioning_service import UserProvisioningService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -29,11 +29,17 @@ def list_users(_p: OwnerReadUsers, session: DbSession) -> list[UserOut]:
 
 
 @router.get("/{user_id}", response_model=UserOut, summary="One user profile (Owner only)")
-def get_user(user_id: uuid.UUID, _p: OwnerReadUsers, session: DbSession) -> UserOut:
+def get_user(
+    user_id: uuid.UUID, request: Request, _p: OwnerReadUsers, session: DbSession
+) -> UserOut:
     profile = ProfileRepository(session).get(user_id)
     if profile is None:
         raise NotFoundError("User not found")
-    return UserOut.model_validate(profile, from_attributes=True)
+    out = UserOut.model_validate(profile, from_attributes=True)
+    if profile.role == "branch":
+        service = UserProvisioningService(ProfileRepository(session), request.app.state.settings)
+        out.email = service.read_email(user_id)
+    return out
 
 
 @router.post(
@@ -51,3 +57,26 @@ def create_user(
     service = UserProvisioningService(ProfileRepository(session), request.app.state.settings)
     profile = service.create_branch_user(principal, body)
     return UserOut.model_validate(profile, from_attributes=True)
+
+
+@router.patch(
+    "/{user_id}",
+    response_model=UserOut,
+    summary="Edit a Branch User: name, email, branch, active status, new password (Owner only)",
+)
+def update_user(
+    user_id: uuid.UUID,
+    body: UserUpdate,
+    request: Request,
+    principal: CurrentPrincipal,
+    session: DbSession,
+) -> UserOut:
+    """Owner only (checked in the service by authorize_user_change, and again by RLS / the self-change trigger).
+    A password in the body is forwarded to Supabase Auth through the Admin API and is never stored, logged,
+    audited or returned. Name/branch/status changes are recorded in Activity History by the database audit trigger;
+    email changes and password resets through public.record_user_admin_event."""
+    service = UserProvisioningService(ProfileRepository(session), request.app.state.settings)
+    profile = service.update_branch_user(principal, user_id, body)
+    out = UserOut.model_validate(profile, from_attributes=True)
+    out.email = service.read_email(user_id)
+    return out

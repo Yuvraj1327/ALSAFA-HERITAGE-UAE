@@ -22,6 +22,8 @@ class UserOut(BaseModel):
     branch_id: uuid.UUID | None
     is_active: bool
     created_at: datetime
+    # Only filled by GET/PATCH /users/{id} (read from Supabase Auth for the Owner's edit form). Never a password.
+    email: str | None = None
 
 
 class UserCreate(BaseModel):
@@ -52,6 +54,48 @@ class UserCreate(BaseModel):
 
     @model_validator(mode="after")
     def _password_rules(self) -> "UserCreate":
+        pw = self.password.get_secret_value()
+        if pw != self.confirm_password.get_secret_value():
+            raise ValueError("Passwords do not match")
+        validate_new_password(pw, self.email)
+        return self
+
+
+class UserUpdate(BaseModel):
+    """Owner edits a Branch User. Every field is optional; only the ones sent are changed. There is no role field
+    (a Branch User stays a Branch User). `password` is write-only: it is forwarded to Supabase Auth and never read
+    back, stored, logged or returned (SecretStr + hide_input_in_errors)."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    full_name: str | None = Field(None, min_length=1, max_length=150)
+    email: str | None = Field(None, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    branch_id: uuid.UUID | None = None
+    is_active: bool | None = None
+    password: SecretStr | None = None
+    confirm_password: SecretStr | None = None
+
+    @field_validator("email")
+    @classmethod
+    def _lower(cls, v: str | None) -> str | None:
+        return v.strip().lower() if v is not None else None
+
+    @field_validator("full_name")
+    @classmethod
+    def _not_blank(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("Name must not be blank")
+        return v
+
+    @model_validator(mode="after")
+    def _password_rules(self) -> "UserUpdate":
+        if self.password is None and self.confirm_password is None:
+            return self
+        if self.password is None or self.confirm_password is None:
+            raise ValueError("Enter and confirm the new password")
         pw = self.password.get_secret_value()
         if pw != self.confirm_password.get_secret_value():
             raise ValueError("Passwords do not match")
