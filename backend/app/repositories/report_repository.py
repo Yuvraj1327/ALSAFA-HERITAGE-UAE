@@ -353,6 +353,16 @@ class BalanceRepository(BaseRepository):
         return dict(r)
 
 
+class SupplierTotalsRepository(BaseRepository):
+    def outstanding_total(self) -> Decimal:
+        """Everything owed to ALL suppliers (active or not): the same figure as the Suppliers page.
+        (The 'needs attention' alert counts only active suppliers; a deactivated supplier still has to be paid.)"""
+        v = self.session.execute(
+            text("select coalesce(sum(outstanding), 0) from public.v_supplier_outstanding")
+        ).scalar_one()
+        return Decimal(v)
+
+
 class AlertRepository(BaseRepository):
     """Counts for the 'Needs attention' list, from the existing tables (owner-only through RLS)."""
 

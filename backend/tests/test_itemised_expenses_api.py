@@ -1001,3 +1001,48 @@ def test_concurrent_double_submit_creates_one_report_and_one_set_of_entries(
     assert balances(Api(client, key), owner)[0] == D(
         "1070"
     )  # 500 + 600 cash received - 30 paid, deducted once
+
+
+# ------------------------------------------------------------------------------------------------ 9. deactivated suppliers
+def test_deactivated_supplier_still_counts_and_old_reports_stay_editable(
+    api, owner, main_user, sup, bid, admin
+) -> None:
+    rows = [
+        L("Raw Material", "drums", "200.00", "Unpaid", None, supplier_id=str(sup)),
+        L("Food", "lunch", "10.00"),
+    ]
+    r = submit(api, main_user, expenses=rows)
+    admin.execute("update public.suppliers set is_active=false where id=%s", (sup,))
+    # (A) what is owed does not disappear from the dashboard / analytics when a supplier is deactivated
+    module_total = api.get(owner, "/suppliers/summary").json()["total_outstanding"]
+    assert module_total == "200.00"
+    k = api.get(owner, "/dashboard/owner", mode="day", date=D1.isoformat()).json()["kpis"]
+    assert k["supplier_outstanding"] == module_total
+    ov = api.get(
+        owner, "/reports/overview", date_from=D1.isoformat(), date_to=D1.isoformat()
+    ).json()["kpis"]
+    assert ov["supplier_outstanding"] == module_total
+    # (B) the Owner can still correct that report (unchanged supplier row + a changed figure)...
+    e = _edit(api, owner, r["id"], bid["ALSAFA MAIN"], total_sales="1100.00", expenses=rows)
+    assert e.status_code == 200, e.text
+    assert e.json()["total_sales"] == "1100.00" and e.json()["expenses_outstanding"] == "200.00"
+    assert supplier(api, owner, sup)["outstanding"] == "200.00"
+    # ...and may change that row's amount...
+    rows2 = [L("Raw Material", "drums", "250.00", "Unpaid", None, supplier_id=str(sup))]
+    assert _edit(api, owner, r["id"], bid["ALSAFA MAIN"], expenses=rows2).status_code == 200
+    assert supplier(api, owner, sup)["outstanding"] == "250.00"
+    # ...but an inactive supplier is still refused for a NEW report and for a row that never used it
+    assert (
+        api.post(main_user, "/daily-reports", report_body(d=D2, expenses=rows2)).status_code == 422
+    )
+    other = admin.execute(
+        "insert into public.suppliers (name, is_active) values ('Closed Co', false) returning id"
+    ).fetchone()[0]
+    bad = _edit(
+        api,
+        owner,
+        r["id"],
+        bid["ALSAFA MAIN"],
+        expenses=rows2 + [L("Food", "x", "5.00", "Unpaid", None, supplier_id=str(other))],
+    )
+    assert bad.status_code == 422 and "inactive" in bad.text

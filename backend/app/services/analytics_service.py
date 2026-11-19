@@ -28,7 +28,7 @@ from app.core.exceptions import NotFoundError, UnprocessableError
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.repositories.hr_repository import HrRepository
 from app.repositories.rental_repository import RentalRepository
-from app.repositories.report_repository import AlertRepository
+from app.repositories.report_repository import SupplierTotalsRepository
 from app.repositories.shop_expense_repository import ShopExpenseRepository
 from app.repositories.shop_expense_repository import filters as shop_filters
 from app.schemas.analytics import (
@@ -434,7 +434,7 @@ class AnalyticsService(BaseService):
                 net_cash_period=t.net_cash,
                 net_cash_in_hand=bal.cash_in_hand,
                 supplier_outstanding=money(
-                    AlertRepository(self.session).counts(self.today)["suppliers_owed_total"]
+                    SupplierTotalsRepository(self.session).outstanding_total()
                 ),
             ),
             notes=notes,

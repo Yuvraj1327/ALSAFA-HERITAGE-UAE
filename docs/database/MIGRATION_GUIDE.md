@@ -54,3 +54,11 @@ Additive; touches no existing row's values. **Do not run it first on production.
    on `POST/PUT /daily-reports`, `GET /expenses/other` is replaced by `GET /expenses/shop`, and `edit_daily_report` has a new signature.
 6. No new roles, extensions or secrets are needed. `app_api` keeps its existing grants (the new functions/table are granted to `authenticated`, which `app_api` is a member of).
 Rollback: restore the backup. (The migration is not reversible in place because new reports may already use the new rows.)
+
+
+## 0022 — deactivated suppliers on existing reports (apply after 0021)
+Found in the pre-production review of 0021: the Owner could not correct a daily report whose supplier had been deactivated afterwards.
+`0022_report_edit_inactive_supplier.sql` replaces three functions (`app.parse_report_expenses`, `app.write_report_expenses`, `public.edit_daily_report`);
+no table or row changes. A deactivated supplier is accepted on rows of the *same* report that already used it, and still refused on new reports and new rows.
+Apply it as one script after 0021 and **before** deploying the matching backend (the old backend works with it). Running it twice is harmless.
+Matching backend change: dashboard and analytics "Supplier Outstanding" now sums **all** suppliers (same figure as the Suppliers page) instead of only active ones.

@@ -52,6 +52,7 @@ migration and the backend going live (minutes). Do it when no branch is submitti
    * If it stops with *"These daily reports do not reconcile"*, nothing changed. Fix the listed reports (Owner edit/void on the OLD app) and re-run.
    * Running it twice is safe: the second run fails on "relation already exists" and changes nothing.
 3. **Snapshot again** — run the same script, save `after.txt`. `diff before.txt after.txt` must be **empty**. Any difference ⇒ **STOP**, restore the backup, do not deploy.
+3b. **Apply `0022_report_edit_inactive_supplier.sql`** (one script, after the snapshot comparison is clean; the previous backend works with it).
 4. **Deploy the backend (Railway)** — deploy the new commit. Settings: root directory `backend`; build `pip install -r requirements.lock`; start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`; health check path `/api/v1/health`. Wait for `GET /api/v1/health` = ok **and** `GET /api/v1/health/ready` = ok. Check the deploy log for errors.
 5. **Quick API check (read-only)** with an Owner token: `GET /api/v1/daily-reports/supplier-options`, `GET /api/v1/expenses/shop`, `GET /api/v1/dashboard/owner` → all 200.
 6. **Deploy the frontend (Vercel)** — promote the new build. Build `npm run build`, output `dist`, env `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` unchanged. (`CORS_ORIGINS` unchanged.)

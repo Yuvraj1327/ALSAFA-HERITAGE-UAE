@@ -15,6 +15,7 @@ from app.repositories.report_repository import (
     BalanceRepository,
     HeadOfficeRepository,
     ReportRepository,
+    SupplierTotalsRepository,
 )
 from app.schemas.dashboard import (
     Alert,
@@ -334,9 +335,7 @@ class DashboardService(BaseService):
             shop_expenses_outstanding=totals.shop_outstanding,
             net_cash_period=totals.net_cash,
             net_cash_in_hand=balances.cash_in_hand,
-            supplier_outstanding=money(
-                AlertRepository(self.session).counts(today)["suppliers_owed_total"]
-            ),
+            supplier_outstanding=money(SupplierTotalsRepository(self.session).outstanding_total()),
         )
         return OwnerDashboard(
             mode=mode,
