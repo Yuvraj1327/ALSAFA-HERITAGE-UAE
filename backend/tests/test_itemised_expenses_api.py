@@ -998,4 +998,6 @@ def test_concurrent_double_submit_creates_one_report_and_one_set_of_entries(
     assert admin.execute(
         "select kind, count(*) from public.supplier_entries where voided_at is null group by 1 order by 1"
     ).fetchall() == [("due", 1), ("payment", 1)]
-    assert balances(Api(client, key), owner)[0] == D("1070")  # 500 + 600 cash received - 30 paid, deducted once
+    assert balances(Api(client, key), owner)[0] == D(
+        "1070"
+    )  # 500 + 600 cash received - 30 paid, deducted once

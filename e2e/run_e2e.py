@@ -3643,7 +3643,10 @@ def run_itemised_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b
         s_, r_ = post("/suppliers", {"name": nm})
         assert s_ == 201, r_
         ids[nm] = r_["id"]
-    bal = lambda: {k: Dc(v) for k, v in get("/cash-banks/summary")[1].items() if k in ("cash_in_hand", "enbd", "adcb", "pos_pending", "total_savings")}  # type: ignore[union-attr]
+    def bal() -> dict[str, Dc]:
+        wanted = ("cash_in_hand", "enbd", "adcb", "pos_pending", "total_savings")
+        return {k: Dc(v) for k, v in get("/cash-banks/summary")[1].items() if k in wanted}  # type: ignore[union-attr]
+
     base = bal()
     state: dict = {}
 
@@ -3658,7 +3661,7 @@ def run_itemised_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b
         expect(page.get_by_role("heading", name="Dashboard", level=1)).to_be_visible()
         return ctx, page, problems
 
-    def add_row(page: Page, category: str, desc: str, amount: str) -> "object":
+    def add_row(page: Page, category: str, desc: str, amount: str) -> object:
         page.get_by_role("button", name="Add expense row").click()
         row = page.get_by_role("group", name=re.compile(r"^Expense row \d+$")).last
         row.get_by_role("combobox", name=re.compile("Expense Category")).click()

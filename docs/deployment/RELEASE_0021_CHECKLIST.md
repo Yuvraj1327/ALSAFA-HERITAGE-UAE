@@ -17,13 +17,13 @@ The repository contains no Railway configuration, so every Railway setting below
 
 ## 2. Compatibility matrix (why the order matters)
 
-| Database | Backend | Frontend | Result |
+| Database | Backend | Frontend | Result (measured unless marked *inferred*) |
 |---|---|---|---|
 | old | old | old | today |
-| **new** | old | old | **Reads work** (reports, dashboard, balances are unchanged). **Submitting a report with expenses fails**: the old backend inserts a total with no rows and the database refuses it at commit; old "Other" items are refused too. Owner edit of a report fails (old function signature is gone). |
-| new | **new** | old | the old page sends the old payload → 422 on submit/edit; other pages work. A browser tab opened before the release must be refreshed. |
-| old | new | any | the backend calls functions that do not exist → submissions fail. **Never deploy the backend first.** |
-| new | new | new | target |
+| **new** | **old** | old | **Reads all work** (reports list, dashboard, branch & date view, head-office expenses, `/expenses/other`, suppliers, analytics, branch-user list: 200). A report with **no expenses** can still be submitted (201) and voided (204). Submitting **with expenses** is refused (422, nothing written) because the old backend sends a total without rows. Old "Other" items are refused (422). **Owner "Edit report" fails with HTTP 500** (the old function signature no longer exists). Measured by running the previous commit's backend against the migrated database. |
+| new | new | **old** | the old page sends the retired payload → 422 on submit/edit (`shop_expenses`/`other_expenses` are rejected; tested); its "Other Expenses" tab errors (`/expenses/other` no longer exists). Other pages work. A browser tab opened before the release must be refreshed. |
+| old | new | any | the new backend calls functions that do not exist yet → submissions fail. *Inferred* (not run). **Never deploy the backend first.** |
+| new | new | new | target (all verification below was run in this combination) |
 
 Required order: **backup → migrate → backend → frontend → smoke test**. The unavoidable gap is the time between the
 migration and the backend going live (minutes). Do it when no branch is submitting.
@@ -38,7 +38,7 @@ migration and the backend going live (minutes). Do it when no branch is submitti
    ```
    Apply any missing earlier files (0017…0020) **in order** before 0021. (`docs/deployment/DEPLOYMENT_GUIDE.md` still lists only 0001–0016.)
 2. **Back up**: Supabase → Database → Backups (take a manual backup / note the PITR timestamp), and export a `pg_dump` of the public schema + data.
-3. **Rehearse on a copy**: restore that backup into a *separate* throw-away Supabase project (or local Postgres 15+), apply 0021 there and run §5 on it. Do not skip: it is the only test on real data shapes.
+3. **Rehearse on a copy**: restore that backup into a *separate* throw-away Supabase project (or local Postgres 15+), apply 0021 there, run the snapshot script before/after (must be identical) and run §5 on it. Do not skip: it is the only test on real data shapes. (`database/verification/rehearse_0021.py` rehearses the migration on a large *synthetic* database; it does not replace this step.)
 4. **Review the Python version**: `backend/pyproject.toml` requires Python ≥ 3.12. In Railway set the Python version explicitly to 3.12 (e.g. variable `RAILPACK_PYTHON_VERSION=3.12` / `NIXPACKS_PYTHON_VERSION=3.12`, depending on the builder) and build from `requirements.lock`.
 5. **Stop automatic deploys of the backend** for the window (Railway → service → Settings → disable auto-deploy / "wait for CI"), so merging code cannot deploy it before the migration. Merge/deploy the backend deliberately in step 3 below.
 6. **Do not change Supabase Auth, the `app_api` password or any environment variable** in this release. No new variables are needed.
@@ -47,7 +47,7 @@ migration and the backend going live (minutes). Do it when no branch is submitti
 
 ## 4. The window (in this order)
 
-1. **Baseline snapshot** — run `database/verification/0021_balance_snapshot.sql` (replace `<OWNER_USER_ID>`), save the output as `before.txt`. Also note `select count(*) from public.daily_reports;`.
+1. **Baseline snapshot** — run `database/verification/0021_balance_snapshot.sql` (read-only; its sensitivity was proven: a 0.01 change is detected) (replace `<OWNER_USER_ID>`), save the output as `before.txt`. Also note `select count(*) from public.daily_reports;`.
 2. **Apply the migration** — paste the *whole* file `database/migrations/0021_itemised_shop_expenses.sql` in one SQL-editor run (or `psql --single-transaction -f`). One script = one transaction: any failure, even at the last statement, rolls everything back (tested).
    * If it stops with *"These daily reports do not reconcile"*, nothing changed. Fix the listed reports (Owner edit/void on the OLD app) and re-run.
    * Running it twice is safe: the second run fails on "relation already exists" and changes nothing.

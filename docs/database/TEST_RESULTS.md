@@ -57,3 +57,21 @@ Reconciliation: MAIN 10-01 matches; JERNAS 10-01 received 200 vs sales 500 -> Di
 
 Baseline before the change (same machine, same database): backend 658 passed / 4 failed / 1 skipped; database 171 passed / 3 failed (one of those, the table-list check, was stale for `user_preferences` and is fixed together with the new table).
 Not run: `e2e/run_e2e.py` (needs live servers; its payloads were updated but it was not executed).
+
+
+## Pre-production verification of 0021 (second pass)
+
+| Check | Result |
+|---|---|
+| Migration rehearsal on a large synthetic database (2,995 reports incl. 105 voided, 3,381 legacy items → 5,169 legacy rows, 119 supplier entries, 60 POS settlements, 80 transfers, 24 cheques; `database/verification/rehearse_0021.py`) | applied in 0.4 s; balances at 14 dates, branch cash, 33-row verification script, every non-shop ledger row, every report/HO row and supplier figure **identical**; second run of 0021 refused and state unchanged; negative control (0.01 change) detected |
+| Query time before → after (3,000 reports) | `app_balances` 17→24 ms, `app_branch_cash` 16→24 ms, ledger (year) 14→22 ms, dashboard totals with expense rows 4 ms |
+| Backend `pytest` (28 itemised API tests incl. full lifecycle and 6-way concurrent double submit) | Python 3.11 and Python 3.12 (locked deps): 694 passed, 4 failed (pre-existing) |
+| Database `pytest` | 223 passed, 2 failed (pre-existing) |
+| Frontend | `tsc`, ESLint, Prettier, build clean; 351 tests passed (+24 live-contract tests, run against real API responses: 24/24) |
+| Browser end to end (real Chrome, real frontend/backend/PostgreSQL, **simulated** Auth) | 124 of 131 passed. The 7 failures are identical to the 7 on the previous commit (login/logout/layout drift, unrelated). All 9 new itemised scenarios pass |
+| Old backend (previous commit) against the migrated database | measured; see `docs/deployment/RELEASE_0021_CHECKLIST.md` §2 |
+
+The pre-existing failures (all reproduced on the commit before this feature): backend `test_owner_profile` (profile now returns avatar/phone/preferences/must_change_password), `test_no_endpoint_accepts_role_changes` and `test_04_05_no_api_route_changes_roles_or_branches`
+(`PATCH /auth/profile` now exists and answers 422; verified that role/branch/active/user_id changes are all refused and the role is unchanged), `test_activity_export_is_complete_and_owner_only`
+(the activity report gained a 8th "Source" column; the test still counts 7-column rows); database `test_audit_does_not_store_secrets` (matches the harmless flag `must_change_password: false`),
+`test_preferences_are_private_per_user` (the test asserts an error inside an open transaction block). Browser: Sign out now opens a confirmation dialog, which 3 of the 7 old scenarios do not click through; the rest are layout/label drift.
