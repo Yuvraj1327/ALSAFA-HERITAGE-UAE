@@ -109,7 +109,16 @@ def w(conn):
 
 
 def add_report(conn, branch_id, d, sales, cash=0, pos=0, tr=0, link=0, exp=0, sav=0, orders=1):
-    return one(conn, """insert into public.daily_reports
+    """Seed a report. `exp` is the report's TOTAL shop expenses incl. savings (as before); the part that is not
+    savings is stored as one Paid-from-Cash 'Other' line so the database reconcile rule
+    (shop_expenses = SUM(lines) + savings) holds."""
+    rid = one(conn, """insert into public.daily_reports
         (report_date, branch_id, total_sales, order_count, cash_received, pos_amount, bank_transfer,
          link_payment, shop_expenses, shop_savings) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
         [d, branch_id, sales, orders, cash, pos, tr, link, exp, sav])
+    if exp - sav > 0:
+        conn.execute("""insert into public.daily_report_expenses
+            (report_id, branch_id, expense_date, line_no, category, description, amount, payment_status,
+             payment_account, amount_paid) values (%s,%s,%s,1,'Other','seed expense',%s,'Paid','Cash',%s)""",
+            [rid, branch_id, d, exp - sav, exp - sav])
+    return rid

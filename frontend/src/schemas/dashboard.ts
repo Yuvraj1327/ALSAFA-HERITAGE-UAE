@@ -22,6 +22,14 @@ export const totalsSchema = z.object({
   shop_expenses: money,
   shop_savings: money,
   shop_expenses_excl_savings: money,
+  /** Payment-based view of the itemised expenses (computed by the server). */
+  shop_paid: money.default('0.00'),
+  shop_unpaid: money.default('0.00'),
+  shop_partial_paid: money.default('0.00'),
+  shop_outstanding: money.default('0.00'),
+  cash_paid_expenses: money.default('0.00'),
+  bank_paid_expenses: money.default('0.00'),
+  net_cash: money.default('0.00'),
 })
 export type Totals = z.infer<typeof totalsSchema>
 
@@ -86,6 +94,14 @@ export const kpisSchema = z.object({
   sales_minus_expenses: money,
   total_orders: z.number(),
   cash_bank_balance: nullableMoney,
+  total_shop_expenses: money.default('0.00'),
+  shop_expenses_paid: money.default('0.00'),
+  shop_expenses_unpaid: money.default('0.00'),
+  shop_partial_payments: money.default('0.00'),
+  shop_expenses_outstanding: money.default('0.00'),
+  net_cash_period: money.default('0.00'),
+  net_cash_in_hand: nullableMoney.optional(),
+  supplier_outstanding: money.default('0.00'),
 })
 
 export const balanceSchema = z.object({

@@ -27,6 +27,8 @@ def _filters(
     branch_id: uuid.UUID | None = None,
     supplier_id: uuid.UUID | None = None,
     account: str | None = None,
+    category: Annotated[str | None, Query(max_length=40)] = None,
+    pay_status: Annotated[str | None, Query(alias="status", max_length=20)] = None,
     kind: str | None = None,
     module: str | None = None,
     action: Literal["INSERT", "UPDATE", "DELETE"] | None = None,
@@ -40,7 +42,7 @@ def _filters(
     end = date_to or today
     return RF(
         d_from=date_from or end.replace(day=1),
-        d_to=end, period=period, branch_id=branch_id, supplier_id=supplier_id, account=account, kind=kind,
+        d_to=end, period=period, branch_id=branch_id, supplier_id=supplier_id, account=account, category=category, status=pay_status, kind=kind,
         module=module, action=action, actor_id=actor_id, source=source, q=q, page=page, page_size=page_size,
     )  # fmt: skip
 

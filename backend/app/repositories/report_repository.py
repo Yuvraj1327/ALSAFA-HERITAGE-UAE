@@ -7,12 +7,13 @@ from typing import Any
 from sqlalchemy import text
 
 from app.repositories.base import BaseRepository
+from app.repositories.shop_expense_repository import ShopExpenseRepository
 
 Row = dict[str, Any]
 
 _REPORT_COLS = """r.id, r.report_date, r.branch_id, b.name as branch_name, r.total_sales, r.order_count,
        r.cash_received, r.pos_amount, r.bank_transfer, r.link_payment, r.shop_expenses, r.shop_savings,
-       r.other_expenses, app.profile_display_name(r.created_by) as prepared_by, r.created_at, r.updated_at"""
+       app.profile_display_name(r.created_by) as prepared_by, r.created_at, r.updated_at"""
 _REPORT_FROM = "from public.daily_reports r join public.branches b on b.id = r.branch_id"
 _ACTIVE = "r.voided_at is null"
 _BRANCH_FILTER = "(cast(:b as uuid) is null or r.branch_id = cast(:b as uuid))"
@@ -20,19 +21,18 @@ _SUMS = """count(*) as report_count,
        coalesce(sum(r.total_sales), 0) as total_sales, coalesce(sum(r.order_count), 0) as total_orders,
        coalesce(sum(r.cash_received), 0) as cash_received, coalesce(sum(r.pos_amount), 0) as pos_amount,
        coalesce(sum(r.bank_transfer), 0) as bank_transfer, coalesce(sum(r.link_payment), 0) as link_payment,
-       coalesce(sum(r.shop_expenses), 0) as shop_expenses, coalesce(sum(r.shop_savings), 0) as shop_savings"""
-
-
-def other_json(items: list[Any] | None) -> str:
-    """Other-expense items as the jsonb stored on the report (amounts as exact 2-place strings)."""
-    out = []
-    for i in items or []:
-        d = i if isinstance(i, dict) else i.model_dump(mode="python")
-        item: dict[str, Any] = {"description": d["description"], "amount": f"{d['amount']:.2f}"}
-        if d.get("notes"):
-            item["notes"] = d["notes"]
-        out.append(item)
-    return json.dumps(out)
+       coalesce(sum(r.shop_expenses), 0) as shop_expenses, coalesce(sum(r.shop_savings), 0) as shop_savings,
+       coalesce(sum(x.paid), 0) as shop_paid, coalesce(sum(x.outstanding), 0) as shop_outstanding,
+       coalesce(sum(x.unpaid_amount), 0) as shop_unpaid, coalesce(sum(x.partial_paid), 0) as shop_partial_paid,
+       coalesce(sum(x.cash_paid), 0) as cash_paid_expenses, coalesce(sum(x.bank_paid), 0) as bank_paid_expenses"""
+# Payment-based sums of a report's ACTIVE expense lines (one row per report, so counts on r stay exact).
+_LINES = """left join lateral (
+         select sum(l.amount_paid) as paid, sum(l.outstanding) as outstanding,
+                sum(l.amount) filter (where l.payment_status = 'Unpaid') as unpaid_amount,
+                sum(l.amount_paid) filter (where l.payment_status = 'Partial') as partial_paid,
+                sum(l.amount_paid) filter (where l.payment_account = 'Cash') as cash_paid,
+                sum(l.amount_paid) filter (where l.payment_account in ('ENBD', 'ADCB')) as bank_paid
+           from public.daily_report_expenses l where l.report_id = r.id and l.voided_at is null) x on true"""
 
 
 class ReportRepository(BaseRepository):
@@ -40,12 +40,12 @@ class ReportRepository(BaseRepository):
 
     # ---- single reports --------------------------------------------------------------------------------
     def insert(self, branch_id: uuid.UUID, report_date: date, v: dict[str, Any]) -> uuid.UUID:
+        """Submit through public.submit_daily_report: the report, its expense lines and the linked supplier due /
+        payment rows are written by ONE database function (identity, branch ownership and every rule re-checked
+        inside), so the whole submission commits or rolls back together."""
         row = self.session.execute(
             text(
-                """insert into public.daily_reports
-                     (report_date, branch_id, total_sales, order_count, cash_received, pos_amount,
-                      bank_transfer, link_payment, shop_expenses, shop_savings, other_expenses)
-                   values (:d, :b, :ts, :oc, :cash, :pos, :bt, :lp, :se, :ss, cast(:oe as jsonb)) returning id"""
+                """select public.submit_daily_report(:b, :d, :ts, :oc, :cash, :pos, :bt, :lp, :ss, cast(:ex as jsonb))"""
             ),
             {
                 "d": report_date,
@@ -56,12 +56,17 @@ class ReportRepository(BaseRepository):
                 "pos": v["pos_amount"],
                 "bt": v["bank_transfer"],
                 "lp": v["link_payment"],
-                "se": v["shop_expenses"],
                 "ss": v["shop_savings"],
-                "oe": other_json(v.get("other_expenses")),
+                "ex": json.dumps(v["expenses"]),
             },
         ).one()
         return row[0]  # type: ignore[no-any-return]
+
+    def _with_lines(self, rows: list[Row]) -> list[Row]:
+        by_report = ShopExpenseRepository(self.session).lines_for_reports([r["id"] for r in rows])
+        for r in rows:
+            r["expenses"] = by_report.get(r["id"], [])
+        return rows
 
     def get(self, report_id: uuid.UUID) -> Row | None:
         r = (
@@ -72,7 +77,7 @@ class ReportRepository(BaseRepository):
             .mappings()
             .first()
         )
-        return None if r is None else dict(r)
+        return None if r is None else self._with_lines([dict(r)])[0]
 
     def list_page(
         self,
@@ -102,7 +107,7 @@ class ReportRepository(BaseRepository):
             .mappings()
             .all()
         )
-        return [dict(r) for r in rows], int(total)
+        return self._with_lines([dict(r) for r in rows]), int(total)
 
     def list_range(self, branch: uuid.UUID | None, d_from: date, d_to: date) -> list[Row]:
         rows = (
@@ -117,22 +122,32 @@ class ReportRepository(BaseRepository):
             .mappings()
             .all()
         )
-        return [dict(r) for r in rows]
+        return self._with_lines([dict(r) for r in rows])
 
     def edit(self, report_id: uuid.UUID, v: dict[str, Any], reason: str) -> None:
-        """Owner correction through public.edit_daily_report (owner check, row lock and audit reason live there)."""
+        """Owner correction through public.edit_daily_report (owner check, row lock, line + supplier-row
+        reconciliation and the audit reason all live in that one atomic database function)."""
         self.session.execute(
             text(
-                "select public.edit_daily_report(:i, :d, :b, :ts, :oc, :cash, :pos, :bt, :lp, :se, :ss,"
-                " cast(:oe as jsonb), :r)"
+                "select public.edit_daily_report(:i, :d, :b, :ts, :oc, :cash, :pos, :bt, :lp, :ss,"
+                " cast(:ex as jsonb), :r)"
             ),
             {
                 "i": report_id, "d": v["report_date"], "b": v["branch_id"], "ts": v["total_sales"],
                 "oc": v["order_count"], "cash": v["cash_received"], "pos": v["pos_amount"],
-                "bt": v["bank_transfer"], "lp": v["link_payment"], "se": v["shop_expenses"],
-                "ss": v["shop_savings"], "oe": other_json(v.get("other_expenses")), "r": reason,
+                "bt": v["bank_transfer"], "lp": v["link_payment"], "ss": v["shop_savings"],
+                "ex": json.dumps(v["expenses"]), "r": reason,
             },
         )  # fmt: skip
+
+    def supplier_options(self) -> list[Row]:
+        """Active suppliers (id + name only) through the secure function a Branch User may call."""
+        rows = (
+            self.session.execute(text("select id, name from public.report_supplier_options()"))
+            .mappings()
+            .all()
+        )
+        return [dict(r) for r in rows]
 
     def history(self, report_id: uuid.UUID, limit: int = 100) -> list[Row]:
         rows = (
@@ -161,7 +176,7 @@ class ReportRepository(BaseRepository):
         r = (
             self.session.execute(
                 text(
-                    f"select {_SUMS} from public.daily_reports r"
+                    f"select {_SUMS} from public.daily_reports r {_LINES}"
                     f" where {_ACTIVE} and {_BRANCH_FILTER} and r.report_date between :f and :t"
                 ),
                 {"b": branch, "f": d_from, "t": d_to},
@@ -175,7 +190,7 @@ class ReportRepository(BaseRepository):
         rows = (
             self.session.execute(
                 text(
-                    f"select r.branch_id, {_SUMS} from public.daily_reports r"
+                    f"select r.branch_id, {_SUMS} from public.daily_reports r {_LINES}"
                     f" where {_ACTIVE} and r.report_date between :f and :t group by r.branch_id"
                 ),
                 {"f": d_from, "t": d_to},
@@ -189,7 +204,7 @@ class ReportRepository(BaseRepository):
         rows = (
             self.session.execute(
                 text(
-                    f"select r.report_date, {_SUMS} from public.daily_reports r"
+                    f"select r.report_date, {_SUMS} from public.daily_reports r {_LINES}"
                     f" where {_ACTIVE} and r.report_date between :f and :t group by r.report_date"
                 ),
                 {"f": d_from, "t": d_to},

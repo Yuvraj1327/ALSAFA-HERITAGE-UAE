@@ -28,6 +28,9 @@ from app.core.exceptions import NotFoundError, UnprocessableError
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.repositories.hr_repository import HrRepository
 from app.repositories.rental_repository import RentalRepository
+from app.repositories.report_repository import AlertRepository
+from app.repositories.shop_expense_repository import ShopExpenseRepository
+from app.repositories.shop_expense_repository import filters as shop_filters
 from app.schemas.analytics import (
     AppliedFilters,
     Chart,
@@ -42,6 +45,7 @@ from app.schemas.analytics import (
     ReportOut,
     SummaryItem,
 )
+from app.schemas.reports import EXPENSE_CATEGORIES, LEGACY_CATEGORY
 from app.services.base import BaseService
 from app.services.cash_bank_service import ACCOUNTS, CashBankService
 from app.services.dashboard_service import DashboardService, _totals
@@ -71,6 +75,9 @@ class RF:
     branch_id: uuid.UUID | None = None
     supplier_id: uuid.UUID | None = None
     account: str | None = None
+    # Shop expenses only: one of the six categories (or "Other (Legacy)") and Paid / Unpaid / Partial
+    category: str | None = None
+    status: str | None = None
     kind: str | None = None
     module: str | None = None
     action: str | None = None
@@ -112,6 +119,10 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "reconciliation_by_date": ("Reconciliation", "Reconciliation history", "Total sales against total collections for each period."),
     "shop_expenses_by_branch": ("Expenses & Savings", "Shop expenses by branch", "Shop expenses, shop savings and expenses excluding savings."),
     "shop_expenses_by_date": ("Expenses & Savings", "Shop expenses by date", "Shop expenses, savings and expenses excluding savings for each period."),
+    "shop_expenses_by_category": ("Expenses & Savings", "Shop expenses by category", "Itemised shop expenses per category: incurred, paid and outstanding."),
+    "shop_expense_items": ("Expenses & Savings", "Shop expense items", "Every itemised shop expense with its supplier, payment status, account, paid and outstanding amounts."),
+    "shop_expenses_by_supplier": ("Expenses & Savings", "Shop expenses by supplier", "Supplier-linked shop expenses: incurred, paid and outstanding per supplier."),
+    "shop_expense_payments": ("Expenses & Savings", "Shop expenses by payment status", "Paid, Unpaid and Partial shop expenses with the amounts actually paid from Cash, ENBD and ADCB."),
     "ho_expenses": ("Expenses & Savings", "Head office expense history", "Every head office expense in the period."),
     "ho_by_category": ("Expenses & Savings", "Head office expenses by category", "Totals per expense category, savings shown separately."),
     "ho_by_source": ("Expenses & Savings", "Head office expenses by payment source", "Totals paid from Cash, ENBD or ADCB."),
@@ -145,6 +156,7 @@ CATALOG: dict[str, tuple[str, str, str]] = {
 # Activity history: audit table -> (module label, label column used to name the record)
 ACTIVITY_MODULES: dict[str, tuple[str, str]] = {
     "daily_reports": ("Daily Reports", "report_date"),
+    "daily_report_expenses": ("Daily Reports", "description"),
     "head_office_expenses": ("Expenses & Savings", "note"),
     "supplier_entries": ("Suppliers", "reference"),
     "suppliers": ("Suppliers", "name"),
@@ -164,7 +176,7 @@ ACTIVITY_MODULES: dict[str, tuple[str, str]] = {
     "customers": ("Customers", "name"),
 }
 MODULE_KEYS = {
-    "daily_reports": ["daily_reports"],
+    "daily_reports": ["daily_reports", "daily_report_expenses"],
     "expenses": ["head_office_expenses"],
     "suppliers": ["suppliers", "supplier_entries"],
     "cash_banks": ["cash_transfers", "pos_settlements"],
@@ -307,6 +319,14 @@ class AnalyticsService(BaseService):
             raise UnprocessableError(
                 "Unknown account", fields={"account": ["Choose a listed account"]}
             )
+        if rf.category is not None and rf.category not in (*EXPENSE_CATEGORIES, LEGACY_CATEGORY):
+            raise UnprocessableError(
+                "Unknown category", fields={"category": ["Choose a listed expense category"]}
+            )
+        if rf.status is not None and rf.status not in ("Paid", "Unpaid", "Partial"):
+            raise UnprocessableError(
+                "Unknown payment status", fields={"status": ["Choose Paid, Unpaid or Partial"]}
+            )
         if rf.module is not None and rf.module not in MODULE_KEYS:
             raise UnprocessableError(
                 "Unknown module", fields={"module": ["Choose a listed module"]}
@@ -321,6 +341,7 @@ class AnalyticsService(BaseService):
         return AppliedFilters(
             date_from=rf.d_from, date_to=rf.d_to, period=rf.period, branch_id=rf.branch_id,
             branch_name=name, supplier_id=rf.supplier_id, account=rf.account,
+            category=rf.category, status=rf.status,
         )  # fmt: skip
 
     def catalog(self) -> list[ReportCatalogItem]:
@@ -405,6 +426,16 @@ class AnalyticsService(BaseService):
                 not_yet_received=t.not_yet_received,
                 balance_status=bal.status,
                 balance_date=bal.balance_date,
+                total_shop_expenses=t.shop_expenses,
+                shop_expenses_paid=t.shop_paid,
+                shop_expenses_unpaid=t.shop_unpaid,
+                shop_partial_payments=t.shop_partial_paid,
+                shop_expenses_outstanding=t.shop_outstanding,
+                net_cash_period=t.net_cash,
+                net_cash_in_hand=bal.cash_in_hand,
+                supplier_outstanding=money(
+                    AlertRepository(self.session).counts(self.today)["suppliers_owed_total"]
+                ),
             ),
             notes=notes,
             generated_at=datetime.now(BUSINESS_TZ),
@@ -514,32 +545,128 @@ class AnalyticsService(BaseService):
         return self._recon_table("reconciliation_by_date", C("period", "Period"), rows)
 
     # ---- expenses and savings ----------------------------------------------------------------------------
-    def _shop_table(self, key: str, first: ReportColumn, items: list[tuple[str, Row]]) -> Table:
+    def _shop_lines(self, rf: RF) -> dict[str, Any]:
+        return shop_filters(
+            rf.d_from, rf.d_to, rf.branch_id, rf.category, rf.supplier_id, rf.status, rf.q
+        )
+
+    def _shop_table(
+        self,
+        key: str,
+        first: ReportColumn,
+        items: list[tuple[str, Row]],
+        paid_by: dict[str, Row] | None = None,
+    ) -> Table:
+        """Header-based figures (incurred = itemised + savings) plus the payment view of the itemised lines."""
+        paid_by = paid_by or {}
         rows: list[Row] = []
         for label, s in items:
             t = _totals(s)
+            ln = paid_by.get(label, {})
+            paid = money(ln.get("paid", ZERO))
             rows.append({"label": label, "expenses": t.shop_expenses, "savings": t.shop_savings,
-                         "excl": t.shop_expenses_excl_savings})  # fmt: skip
+                         "excl": t.shop_expenses_excl_savings, "paid": paid,
+                         "outstanding": calc.expense_outstanding(t.shop_expenses_excl_savings, paid)})  # fmt: skip
         exp = money(sum((r["expenses"] for r in rows), ZERO))
         sav = money(sum((r["savings"] for r in rows), ZERO))
+        paid_total = money(sum((r["paid"] for r in rows), ZERO))
+        excl_total = calc.shop_expenses_excl_savings(exp, sav)
         return Table(
             key,
             [first, C("expenses", "Shop expenses (AED)", "money"), C("savings", "Shop savings (AED)", "money"),
-             C("excl", "Shop expenses excluding savings (AED)", "money")],
+             C("excl", "Shop expenses excluding savings (AED)", "money"),
+             C("paid", "Paid (AED)", "money"), C("outstanding", "Outstanding (AED)", "money")],
             rows,
             [S("Total shop expenses (AED)", exp), S("Shop savings (AED)", sav),
-             S("Expenses excluding savings (AED)", calc.shop_expenses_excl_savings(exp, sav))],
-            ["Savings are excluded from normal expenses (approved rule)."],
+             S("Expenses excluding savings (AED)", excl_total),
+             S("Paid (AED)", paid_total), S("Outstanding (AED)", calc.expense_outstanding(excl_total, paid_total))],
+            ["Savings are excluded from normal expenses (approved rule).",
+             "Expenses are counted when incurred, including credit purchases; Paid is what was actually paid."],
         )  # fmt: skip
 
     def shop_expenses_by_branch(self, rf: RF) -> Table:
+        lines = ShopExpenseRepository(self.session).totals_by_branch(rf.d_from, rf.d_to)
+        names = {b["branch_id"]: b["branch_name"] for b, _ in self.by_branch(rf)}
         return self._shop_table(
             "shop_expenses_by_branch", C("label", "Branch"),
             [(b["branch_name"], s) for b, s in self.by_branch(rf)],
+            {names[k]: v for k, v in lines.items() if k in names},
         )  # fmt: skip
 
     def shop_expenses_by_date(self, rf: RF) -> Table:
-        return self._shop_table("shop_expenses_by_date", C("label", "Period"), self.grouped(rf))
+        by_day = ShopExpenseRepository(self.session).totals_by_day(rf.d_from, rf.d_to)
+        buckets: dict[str, Row] = {}
+        for d, v in by_day.items():
+            b = buckets.setdefault(_bucket(d, rf.period), {"paid": ZERO})
+            b["paid"] += money(v["paid"])
+        return self._shop_table(
+            "shop_expenses_by_date", C("label", "Period"), self.grouped(rf), buckets
+        )
+
+    # ---- itemised shop expenses (daily_report_expenses) ---------------------------------------------------
+    @staticmethod
+    def _group_table(key: str, first: ReportColumn, groups: list[Row], notes: list[str]) -> Table:
+        rows = [
+            {"label": g["label"], "lines": int(g["lines"]), "total": money(g["total"]), "paid": money(g["paid"]),
+             "outstanding": calc.expense_outstanding(money(g["total"]), money(g["paid"])),
+             "cash_paid": money(g["cash_paid"]), "bank_paid": money(g["bank_paid"])}
+            for g in groups
+        ]  # fmt: skip
+        tot = money(sum((r["total"] for r in rows), ZERO))
+        paid = money(sum((r["paid"] for r in rows), ZERO))
+        return Table(
+            key,
+            [first, C("lines", "Items", "int"), C("total", "Incurred (AED)", "money"), C("paid", "Paid (AED)", "money"),
+             C("outstanding", "Outstanding (AED)", "money"), C("cash_paid", "Paid in cash (AED)", "money"),
+             C("bank_paid", "Paid from ENBD / ADCB (AED)", "money")],
+            rows,
+            [S("Items", sum(r["lines"] for r in rows), "int"), S("Incurred (AED)", tot), S("Paid (AED)", paid),
+             S("Outstanding (AED)", calc.expense_outstanding(tot, paid))],
+            notes,
+        )  # fmt: skip
+
+    def shop_expenses_by_category(self, rf: RF) -> Table:
+        return self._group_table(
+            "shop_expenses_by_category", C("label", "Category"),
+            ShopExpenseRepository(self.session).breakdown("category", self._shop_lines(rf)),
+            ["Savings are not an expense category. 'Other (Legacy)' holds expenses entered before itemised reporting."],
+        )  # fmt: skip
+
+    def shop_expenses_by_supplier(self, rf: RF) -> Table:
+        return self._group_table(
+            "shop_expenses_by_supplier", C("label", "Supplier"),
+            ShopExpenseRepository(self.session).breakdown("supplier", self._shop_lines(rf)),
+            ["'No supplier' = expenses paid directly. Supplier balances (opening + dues - payments) are in Suppliers."],
+        )  # fmt: skip
+
+    def shop_expense_payments(self, rf: RF) -> Table:
+        return self._group_table(
+            "shop_expense_payments", C("label", "Payment status"),
+            ShopExpenseRepository(self.session).breakdown("status", self._shop_lines(rf)),
+            ["Unpaid and the unpaid part of Partial expenses stay outstanding with the supplier until paid."],
+        )  # fmt: skip
+
+    def shop_expense_items(self, rf: RF) -> Table:
+        rows, agg = ShopExpenseRepository(self.session).lines_page(
+            self._shop_lines(rf), ALL_ROWS, 0
+        )
+        for r in rows:
+            r["supplier"] = r["supplier_name"] or ""
+            r["account"] = r["payment_account"] or ""
+            r["remarks"] = r["remarks"] or ""
+            r["outstanding"] = calc.expense_outstanding(r["amount"], r["amount_paid"])
+        tot, paid = money(agg["total"]), money(agg["paid"])
+        return Table(
+            "shop_expense_items",
+            [C("expense_date", "Date", "date"), C("branch_name", "Branch"), C("category", "Category"),
+             C("description", "Description"), C("supplier", "Supplier"), C("payment_status", "Status"),
+             C("account", "Paid from"), C("amount", "Amount (AED)", "money"), C("amount_paid", "Paid (AED)", "money"),
+             C("outstanding", "Outstanding (AED)", "money"), C("remarks", "Remarks")],
+            rows,
+            [S("Items", len(rows), "int"), S("Incurred (AED)", tot), S("Paid (AED)", paid),
+             S("Outstanding (AED)", calc.expense_outstanding(tot, paid))],
+            ["Itemised from the submitted daily reports. Savings are not listed here."],
+        )  # fmt: skip
 
     def ho_expenses(self, rf: RF) -> Table:
         rows = self.repo.ho_list(rf.branch_id, rf.d_from, rf.d_to)
@@ -1282,6 +1409,8 @@ class AnalyticsService(BaseService):
         by_branch = self.sales_by_branch(rf).rows
         shop = self.shop_expenses_by_date(rf).rows
         cats = self.ho_by_category(rf).rows
+        shop_cats = self.shop_expenses_by_category(rf).rows
+        shop_status = self.shop_expense_payments(rf).rows
         ho_day = self.repo.ho_by_day(rf.branch_id, rf.d_from, rf.d_to)
         sup = sorted(
             self.supplier_balances(RF(rf.d_from, rf.d_to)).rows,
@@ -1340,6 +1469,10 @@ class AnalyticsService(BaseService):
                    ChartPoint(label="Head office expenses", values={"Amount": ho_excl})], none),
             chart("expense_categories", "Head office expenses by category", "pie", "AED", ["Amount"],
                   pts(cats, "label", Amount="excl"), "No head office expenses in the selected period."),
+            chart("shop_expense_categories", "Shop expenses by category", "pie", "AED", ["Amount"],
+                  pts(shop_cats, "label", Amount="total"), "No itemised shop expenses in the selected period."),
+            chart("shop_payment_status", "Shop expenses: paid vs outstanding", "bar", "AED", ["Paid", "Outstanding"],
+                  pts(shop_status, "label", Paid="paid", Outstanding="outstanding"), "No itemised shop expenses in the selected period."),
             chart("savings_trend", "Savings trend", "line", "AED", ["Shop savings", "Head office savings", "Total"],
                   pts(sav_rows, "label", **{"Shop savings": "shop", "Head office savings": "ho", "Total": "total"}), "No savings recorded in the selected period."),
             chart("cash_bank", "Cash and bank balances", "bar", "AED", ["Closing balance"],

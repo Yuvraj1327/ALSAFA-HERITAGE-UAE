@@ -119,3 +119,11 @@ screen for all 35 reports, formula-injection guard, activity history and its exp
 a real database, browsers other than headless Chrome, performance on production-size data (tests use small data sets).
 A defect found and fixed by these tests: the activity report crashed on `ACCESS_DENIED` audit rows. Fixed in the E2E run:
 the Reports page requested a report with an empty key before the catalog loaded (now disabled until a key exists).
+
+
+## 0021 additions
+New reports (Expenses & Savings): `shop_expenses_by_category`, `shop_expense_items`, `shop_expenses_by_supplier`, `shop_expense_payments`.
+`shop_expenses_by_branch` / `_by_date` gain *Paid* and *Outstanding* columns (header figures unchanged: savings still excluded from expenses).
+Shop reports accept `category` and `status` filters (also on the CSV/XLSX export, which is built from the same rows as the screen).
+Overview KPIs add total/paid/unpaid/partial/outstanding shop expenses, supplier outstanding, net cash (period) and net cash in hand.
+Charts add *Shop expenses by category* and *Shop expenses: paid vs outstanding*.

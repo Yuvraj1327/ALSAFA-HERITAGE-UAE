@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFakeSupabase, makeSession } from '@/test/fake-supabase'
 import {
   BRANCH_VIEW_EMPTY,
@@ -13,7 +13,12 @@ import {
   stubApi,
   type ApiReply,
 } from '@/test/render-app'
-import { reportFormSchema } from '@/schemas/reports'
+import {
+  expenseLineFormSchema,
+  expenseTotals,
+  reportFormSchema,
+  toExpensePayload,
+} from '@/schemas/reports'
 import { addDays, addMonths, quickRange } from '@/utils/period'
 import { dubaiToday } from '@/utils/format'
 
@@ -29,6 +34,7 @@ const BRANCHES = [
   { id: 'b1', name: 'Test Branch One', sort_order: 1, is_active: true },
   { id: 'b2', name: 'Test Branch Two', sort_order: 2, is_active: true },
 ]
+const SUPPLIERS = [{ id: 's1', name: 'Fresh Chem LLC' }]
 const PAGE = { items: [REPORT_SAMPLE], total: 1, page: 1, page_size: 25 }
 
 type Handler = (
@@ -48,6 +54,8 @@ function api(profile: object, extra?: Handler) {
         return { status: 200, body: BRANCH_VIEW_EMPTY }
       case '/daily-reports':
         return { status: 200, body: PAGE }
+      case '/daily-reports/supplier-options':
+        return { status: 200, body: SUPPLIERS }
       default:
         return { status: 200, body: profile }
     }
@@ -81,8 +89,8 @@ describe('report form schema (mirrors the server rules)', () => {
     pos_amount: '',
     bank_transfer: '',
     link_payment: '',
-    shop_expenses: '',
     shop_savings: '',
+    expenses: [],
   }
   const messages = (v: object) => {
     const r = schema.safeParse({ ...ok, ...v })
@@ -98,7 +106,6 @@ describe('report form schema (mirrors the server rules)', () => {
     [{ total_sales: '' }, 'Enter the total sales'],
     [{ cash_received: '-5' }, 'Enter a valid amount (max 2 decimals)'],
     [{ pos_amount: '1.234' }, 'Enter a valid amount (max 2 decimals)'],
-    [{ shop_expenses: '10', shop_savings: '20' }, 'Savings cannot exceed shop expenses'],
     [{ report_date: '2026-11-10' }, 'Report date cannot be in the future'],
     [{ order_count: '' }, 'Enter the number of orders'],
     [{ order_count: '1.5' }, 'Enter a whole number of orders (0 or more)'],
@@ -127,12 +134,35 @@ describe('period helpers', () => {
 })
 
 /* ---------------------------------- Daily Reports ---------------------------------- */
-async function fillValid(user: ReturnType<typeof userEvent.setup>) {
+type User = ReturnType<typeof userEvent.setup>
+
+/** Adds one itemised expense row and fills it. Returns the row's group element. */
+async function addRow(
+  user: User,
+  v: { category: string; description: string; amount: string; remarks?: string },
+) {
+  await user.click(screen.getByRole('button', { name: 'Add expense row' }))
+  const rows = screen.getAllByRole('group', { name: /^Expense row \d+$/ })
+  const row = rows[rows.length - 1]!
+  await user.click(within(row).getByRole('combobox', { name: /Expense Category/ }))
+  await user.click(await screen.findByRole('option', { name: v.category }))
+  await user.type(within(row).getByLabelText('Description'), v.description)
+  await user.type(within(row).getByLabelText('Amount (AED)'), v.amount)
+  if (v.remarks) await user.type(within(row).getByLabelText('Remarks'), v.remarks)
+  return row
+}
+
+async function pick(user: User, row: HTMLElement, label: RegExp, option: string) {
+  await user.click(within(row).getByRole('combobox', { name: label }))
+  await user.click(await screen.findByRole('option', { name: option }))
+}
+
+async function fillValid(user: User) {
   await user.type(screen.getByLabelText(/Total Sales/), '1000')
   await user.type(screen.getByLabelText(/Number of Orders/), '10')
   await user.type(screen.getByLabelText(/^Cash/), '600')
   await user.type(screen.getByLabelText(/^POS/), '200')
-  await user.type(screen.getByLabelText(/Shop Expenses/), '300')
+  await addRow(user, { category: 'Food', description: 'Lunch', amount: '200' })
   await user.type(screen.getByLabelText(/^Savings/), '100')
 }
 
@@ -158,10 +188,12 @@ describe('Daily Reports page', () => {
     expect(screen.getByText('Enter the number of orders')).toBeInTheDocument()
     await user.type(screen.getByLabelText(/Total Sales/), '100')
     await user.type(screen.getByLabelText(/Number of Orders/), '1')
-    await user.type(screen.getByLabelText(/Shop Expenses/), '10')
-    await user.type(screen.getByLabelText(/^Savings/), '20')
+    await user.click(screen.getByRole('button', { name: 'Add expense row' }))
     await user.click(screen.getByRole('button', { name: 'Review & submit' }))
-    expect(await screen.findByText('Savings cannot exceed shop expenses')).toBeInTheDocument()
+    // an empty expense row is rejected row by row
+    expect(await screen.findByText('Select a category')).toBeInTheDocument()
+    expect(screen.getByText('Enter a description')).toBeInTheDocument()
+    expect(screen.getByText('Enter the amount')).toBeInTheDocument()
     expect(calls.some((c) => c.method === 'post')).toBe(false)
   })
 
@@ -193,6 +225,18 @@ describe('Daily Reports page', () => {
       cash_received: '600',
       shop_savings: '100',
     })
+    // the total is computed by the server: it is never sent
+    expect(body).not.toHaveProperty('shop_expenses')
+    expect(body.expenses).toEqual([
+      {
+        category: 'Food',
+        description: 'Lunch',
+        amount: '200',
+        payment_status: 'Paid',
+        payment_account: 'Cash',
+        amount_paid: '200.00',
+      },
+    ])
     const keys = invalidate.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0])
     expect(keys).toEqual(expect.arrayContaining(['daily-reports', 'dashboard', 'branch-date-view']))
   })
@@ -347,6 +391,28 @@ describe('Owner dashboard', () => {
     expect(
       screen.getByText(/Not configured: balances need the opening balances/),
     ).toBeInTheDocument()
+  })
+
+  it('shows the shop expense, supplier and net cash cards from the server figures', async () => {
+    api(PROFILE_OWNER)
+    renderApp('/')
+    const cards = await screen.findByTestId('expense-kpis')
+    await within(cards).findByText(/380\.00/)
+    for (const label of [
+      'Total Shop Expenses',
+      'Paid Shop Expenses',
+      'Unpaid Shop Expenses',
+      'Partial Payments',
+      'Supplier Outstanding',
+      'Net Cash for the Period',
+      'Net Cash in Hand',
+      'ENBD / ADCB',
+    ]) {
+      expect(within(cards).getByText(label)).toBeInTheDocument()
+    }
+    expect(within(cards).getByText(/170\.00/)).toBeInTheDocument() // paid
+    expect(within(cards).getByText(/1,250\.00/)).toBeInTheDocument() // supplier outstanding
+    expect(within(cards).getByText(/700\.00/)).toBeInTheDocument() // net cash for the period
   })
 
   it('empty database: every KPI is zero, nothing is invented, and empty states are shown', async () => {
@@ -626,5 +692,288 @@ describe('Branch & Date View', () => {
     )
     renderApp('/branch-date-view')
     expect(await screen.findByText(/Choose at most 92 days/)).toBeInTheDocument()
+  })
+})
+
+/* ---------------------------------- Itemised shop expenses ---------------------------------- */
+describe('expense row rules (mirror the server)', () => {
+  const row = {
+    category: 'Food',
+    description: 'Lunch',
+    amount: '100',
+    payment_status: 'Paid' as const,
+    payment_account: 'Cash',
+    supplier_id: '',
+    amount_paid: '',
+  }
+  const msgs = (v: object) => {
+    const r = expenseLineFormSchema.safeParse({ ...row, ...v })
+    return r.success ? [] : r.error.issues.map((i) => i.message)
+  }
+
+  it('accepts all six categories and rejects anything else (Savings is not a category)', () => {
+    for (const c of [
+      'Food',
+      'Raw Material',
+      'Stationery',
+      'Repairs & Maintenance',
+      'Petrol',
+      'Other',
+    ]) {
+      expect(msgs({ category: c })).toEqual([])
+    }
+    expect(msgs({ category: 'Savings' })).toContain('Select a category')
+    expect(msgs({ category: 'Other (Legacy)' })).toContain('Select a category')
+    expect(msgs({ category: '' })).toContain('Select a category')
+  })
+  it('amount must be greater than zero', () => {
+    expect(msgs({ amount: '0' })).toContain('Amount must be greater than zero')
+    expect(msgs({ amount: '' })).toContain('Enter the amount')
+    expect(msgs({ amount: '1.234' })).toContain('Enter a valid amount (max 2 decimals)')
+  })
+  it('Paid needs an account; Unpaid needs a supplier and no account', () => {
+    expect(msgs({ payment_account: '' })).toContain('Choose the payment account')
+    expect(msgs({ payment_status: 'Unpaid', payment_account: '' })).toContain(
+      'Select the supplier this is owed to',
+    )
+    expect(msgs({ payment_status: 'Unpaid', payment_account: '', supplier_id: 's1' })).toEqual([])
+  })
+  it('Partial: paid must be more than zero and less than the amount, and needs a supplier', () => {
+    const partial = { payment_status: 'Partial' as const, supplier_id: 's1' }
+    expect(msgs({ ...partial, amount_paid: '' })).toContain(
+      'Enter the amount paid (more than zero)',
+    )
+    expect(msgs({ ...partial, amount_paid: '0' })).toContain(
+      'Enter the amount paid (more than zero)',
+    )
+    expect(msgs({ ...partial, amount_paid: '100' })).toContain(
+      'Must be less than the expense amount',
+    )
+    expect(msgs({ ...partial, amount_paid: '150' })).toContain(
+      'Must be less than the expense amount',
+    )
+    expect(msgs({ ...partial, amount_paid: '40' })).toEqual([])
+    expect(msgs({ ...partial, supplier_id: '', amount_paid: '40' })).toContain(
+      'Select the supplier this is owed to',
+    )
+  })
+  it('totals: itemised + savings, paid and outstanding, exact in fils', () => {
+    const lines = [
+      { amount: '100.10', payment_status: 'Paid' },
+      { amount: '200', payment_status: 'Unpaid' },
+      { amount: '300.20', payment_status: 'Partial', amount_paid: '120.05' },
+    ]
+    expect(expenseTotals(lines, '50')).toEqual({
+      itemised: '600.30',
+      total: '650.30', // itemised + savings
+      paid: '220.15', // 100.10 + 0 + 120.05
+      outstanding: '380.15',
+    })
+    expect(expenseTotals([], '')).toEqual({
+      itemised: '0.00',
+      total: '0.00',
+      paid: '0.00',
+      outstanding: '0.00',
+    })
+  })
+  it('API payload: Paid = all paid, Unpaid = nothing paid and no account', () => {
+    const parse = (v: object) => expenseLineFormSchema.parse({ ...row, ...v })
+    const out = toExpensePayload([
+      parse({ amount: '100' }),
+      parse({ payment_status: 'Unpaid', payment_account: 'ENBD', supplier_id: 's1', amount: '50' }),
+      parse({
+        payment_status: 'Partial',
+        supplier_id: 's1',
+        amount: '80',
+        amount_paid: '30',
+        payment_account: 'ADCB',
+      }),
+    ])
+    expect(out.map((o) => [o.payment_status, o.amount_paid, o.payment_account ?? null])).toEqual([
+      ['Paid', '100.00', 'Cash'],
+      ['Unpaid', '0.00', null],
+      ['Partial', '30.00', 'ADCB'],
+    ])
+  })
+})
+
+describe('Daily Reports: itemised expense rows', () => {
+  // Browser console warnings/errors (e.g. React controlled/uncontrolled) must never appear while using the rows.
+  let consoleMessages: string[] = []
+  beforeEach(() => {
+    consoleMessages = []
+    for (const m of ['error', 'warn'] as const) {
+      vi.spyOn(console, m).mockImplementation((...a: unknown[]) => {
+        consoleMessages.push(String(a[0]))
+      })
+    }
+  })
+  afterEach(() => {
+    expect(consoleMessages).toEqual([])
+  })
+
+  async function open() {
+    const calls = api(PROFILE_BRANCH, (url, c) =>
+      url === '/daily-reports' && c.method === 'post'
+        ? { status: 201, body: REPORT_SAMPLE }
+        : undefined,
+    )
+    renderApp('/daily-reports')
+    const user = userEvent.setup()
+    await screen.findByRole('form', { name: 'Daily report form' })
+    return { calls, user }
+  }
+
+  it('add and remove rows; totals are calculated automatically', async () => {
+    const { user } = await open()
+    await addRow(user, { category: 'Food', description: 'Lunch', amount: '40.50' })
+    await addRow(user, { category: 'Petrol', description: 'Van', amount: '60' })
+    await user.type(screen.getByLabelText(/^Savings/), '25')
+    expect(screen.getByTestId('itemised-total')).toHaveTextContent('100.50')
+    expect(screen.getByTestId('shop-expenses-total')).toHaveTextContent('125.50') // itemised + savings
+    expect(screen.getByTestId('paid-total')).toHaveTextContent('100.50')
+    expect(screen.getByTestId('outstanding-total')).toHaveTextContent('0.00')
+    await user.click(screen.getByRole('button', { name: 'Remove expense row 1' }))
+    expect(screen.getAllByRole('group', { name: /^Expense row \d+$/ })).toHaveLength(1)
+    expect(screen.getByTestId('itemised-total')).toHaveTextContent('60.00')
+    expect(screen.getByTestId('shop-expenses-total')).toHaveTextContent('85.00')
+  })
+
+  it('switching a row Paid -> Partial -> Unpaid -> Paid works and logs nothing', async () => {
+    const { user } = await open()
+    const row = await addRow(user, { category: 'Petrol', description: 'Fuel', amount: '300' })
+    await pick(user, row, /Payment Status/, 'Partial')
+    await user.type(within(row).getByLabelText(/Amount Paid/), '100')
+    expect(within(row).getByLabelText(/Outstanding Amount/)).toHaveValue('200.00')
+    await pick(user, row, /Payment Status/, 'Unpaid')
+    expect(within(row).getByLabelText(/Amount Paid/)).toHaveValue('0.00')
+    expect(within(row).getByLabelText(/Outstanding Amount/)).toHaveValue('300.00')
+    await pick(user, row, /Payment Status/, 'Paid')
+    expect(within(row).getByLabelText(/Amount Paid/)).toHaveValue('300.00')
+    expect(within(row).getByLabelText(/Outstanding Amount/)).toHaveValue('0.00')
+  })
+
+  it('offers all six categories', async () => {
+    const { user } = await open()
+    await user.click(screen.getByRole('button', { name: 'Add expense row' }))
+    await user.click(screen.getByRole('combobox', { name: /Expense Category/ }))
+    const names = (await screen.findAllByRole('option')).map((o) => o.textContent)
+    expect(names).toEqual([
+      'Food',
+      'Raw Material',
+      'Stationery',
+      'Repairs & Maintenance',
+      'Petrol',
+      'Other',
+    ])
+  })
+
+  it('Unpaid needs a supplier; the account is disabled; paid and outstanding follow the status', async () => {
+    const { calls, user } = await open()
+    await user.type(screen.getByLabelText(/Total Sales/), '100')
+    await user.type(screen.getByLabelText(/Number of Orders/), '1')
+    const row = await addRow(user, {
+      category: 'Raw Material',
+      description: 'Drums',
+      amount: '200',
+    })
+    await pick(user, row, /Payment Status/, 'Unpaid')
+    expect(within(row).getByRole('combobox', { name: /Payment Account/ })).toBeDisabled()
+    expect(within(row).getByLabelText(/Outstanding Amount/)).toHaveValue('200.00')
+    expect(within(row).getByLabelText(/Amount Paid/)).toHaveValue('0.00')
+    expect(screen.getByTestId('outstanding-total')).toHaveTextContent('200.00')
+    expect(screen.getByTestId('paid-total')).toHaveTextContent('0.00')
+    await user.click(screen.getByRole('button', { name: 'Review & submit' }))
+    expect(await screen.findByText('Select the supplier this is owed to')).toBeInTheDocument()
+    expect(calls.some((c) => c.method === 'post')).toBe(false)
+
+    await pick(user, row, /^Supplier/, 'Fresh Chem LLC') // loaded from /daily-reports/supplier-options
+    await user.click(screen.getByRole('button', { name: 'Review & submit' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Itemised expenses (1)')
+    await user.click(within(dialog).getByRole('button', { name: 'Submit report' }))
+    await screen.findByTestId('submitted-summary')
+    const body = JSON.parse(calls.find((c) => c.method === 'post')!.data as string)
+    expect(body.expenses).toEqual([
+      {
+        category: 'Raw Material',
+        description: 'Drums',
+        amount: '200',
+        supplier_id: 's1',
+        payment_status: 'Unpaid',
+        amount_paid: '0.00',
+      },
+    ])
+  })
+
+  it('Partial: amount paid is validated against the amount; outstanding is the remainder', async () => {
+    const { calls, user } = await open()
+    await user.type(screen.getByLabelText(/Total Sales/), '100')
+    await user.type(screen.getByLabelText(/Number of Orders/), '1')
+    const row = await addRow(user, { category: 'Petrol', description: 'Fuel card', amount: '300' })
+    await pick(user, row, /Payment Status/, 'Partial')
+    await pick(user, row, /^Supplier/, 'Fresh Chem LLC')
+    await pick(user, row, /Payment Account/, 'ENBD')
+    const paid = within(row).getByLabelText(/Amount Paid/)
+    await user.type(paid, '300')
+    await user.click(screen.getByRole('button', { name: 'Review & submit' }))
+    expect(await screen.findByText('Must be less than the expense amount')).toBeInTheDocument()
+    await user.clear(paid)
+    await user.type(paid, '120')
+    expect(within(row).getByLabelText(/Outstanding Amount/)).toHaveValue('180.00')
+    expect(screen.getByTestId('paid-total')).toHaveTextContent('120.00')
+    expect(screen.getByTestId('outstanding-total')).toHaveTextContent('180.00')
+    await user.click(screen.getByRole('button', { name: 'Review & submit' }))
+    await user.click(await screen.findByRole('button', { name: 'Submit report' }))
+    await screen.findByTestId('submitted-summary')
+    const body = JSON.parse(calls.find((c) => c.method === 'post')!.data as string)
+    expect(body.expenses[0]).toMatchObject({
+      payment_status: 'Partial',
+      amount_paid: '120.00',
+      payment_account: 'ENBD',
+      supplier_id: 's1',
+    })
+  })
+
+  it('shows a server row error on the form', async () => {
+    api(PROFILE_BRANCH, (url, c) =>
+      url === '/daily-reports' && c.method === 'post'
+        ? {
+            status: 422,
+            body: {
+              error: {
+                code: 'unprocessable',
+                message: 'Expense line 1: supplier "X" is inactive',
+                fields: { expenses: ['expense line 1: supplier "X" is inactive'] },
+              },
+              request_id: 'r',
+            },
+          }
+        : undefined,
+    )
+    renderApp('/daily-reports')
+    const user = userEvent.setup()
+    await screen.findByRole('form', { name: 'Daily report form' })
+    await fillValid(user)
+    await user.click(screen.getByRole('button', { name: 'Review & submit' }))
+    await user.click(await screen.findByRole('button', { name: 'Submit report' }))
+    expect((await screen.findAllByText(/supplier "X" is inactive/)).length).toBeGreaterThan(0)
+  })
+
+  it('history: the expense items of a report open with supplier, status and net cash', async () => {
+    api(PROFILE_BRANCH)
+    renderApp('/daily-reports')
+    const table = await screen.findByRole('table', { name: 'Daily report history' })
+    expect(within(table).getByText('Net Cash')).toBeInTheDocument()
+    await userEvent.setup().click(
+      await within(table).findByRole('button', {
+        name: /View expense items for Test Branch One/,
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', { name: 'Shop expense items' })
+    expect(within(dialog).getByText('Detergent drums')).toBeInTheDocument()
+    expect(within(dialog).getByText('Fresh Chem LLC')).toBeInTheDocument()
+    expect(within(dialog).getByText('Unpaid')).toBeInTheDocument()
+    expect(dialog).toHaveTextContent('380.00') // net cash after actual payments
   })
 })

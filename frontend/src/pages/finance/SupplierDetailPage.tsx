@@ -76,6 +76,10 @@ export function SupplierDetailPage() {
       cell: (r) =>
         r.voided ? (
           <StatusBadge status="neutral">Voided</StatusBadge>
+        ) : r.source_expense_id ? (
+          <StatusBadge status="info">
+            {`Daily report${r.source_category ? ` · ${r.source_category}` : ''}`}
+          </StatusBadge>
         ) : (
           <Can module="suppliers" action="update">
             <Button

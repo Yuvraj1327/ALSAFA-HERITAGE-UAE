@@ -1,3 +1,5 @@
+> **Superseded by migration 0021** (`docs/finance/ITEMISED_SHOP_EXPENSES.md`): the "Other" JSON list is now a frozen legacy record; itemised expense rows replace it. Owner edit/audit/PDF behaviour described below still applies, with the new edit signature.
+
 # Owner edits, daily-report PDF and "Other" shop expenses
 
 Migration: `database/migrations/0020_owner_edits_other_expenses.sql` (additive; **review it, then apply it yourself** - nothing

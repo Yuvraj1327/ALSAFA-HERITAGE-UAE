@@ -94,6 +94,7 @@ def wipe(admin) -> Iterator[None]:
         "pos_settlements",
         "cash_transfers",
         "head_office_expenses",
+        "daily_report_expenses",
         "daily_reports",
         "opening_branch_cash",
         "opening_balances",

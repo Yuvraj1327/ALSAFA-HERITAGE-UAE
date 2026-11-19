@@ -24,6 +24,12 @@ Conventions: UUID primary keys (`gen_random_uuid()`), `numeric(14,2)` money, `da
 | pdc_cheques | id, agreement_id, cheque_no, bank, cheque_date, amount, status, cleared_at | bank in (ENBD, ADCB); status in (Pending, Cleared, Bounced); amount > 0; unique (agreement_id, cheque_no); cleared_at maintained by trigger and required iff Cleared | (status, cheque_date); agreement |
 | audit_log | id (identity), occurred_at, actor_user_id, action, table_name, record_id, old_values, new_values, reason | append-only (update/delete/truncate raise) | (table, record); occurred_at; actor |
 
+| daily_report_expenses (0021) | id, report_id, branch_id, expense_date, line_no, category, description, amount, remarks, supplier_id, supplier_name, payment_status, payment_account, amount_paid, outstanding (generated), is_legacy, void cols | category in 6 (+ Other (Legacy)); status/paid/account shape check; credit needs supplier; immutable except void | report; branch+date; category; supplier |
+
+Changes by 0021 to existing objects: `supplier_entries.source_expense_id` (+ partial unique index per kind); `daily_reports.shop_expenses` must equal `SUM(active rows) + shop_savings`
+(deferred constraint); `daily_reports.other_expenses` is a frozen legacy record; `app_cash_bank_ledger()` deducts paid amounts per row (see docs/finance/ITEMISED_SHOP_EXPENSES.md);
+`edit_daily_report()` (new signature) and `void_daily_report()` reconcile rows and supplier ledger rows; new `submit_daily_report()` and `report_supplier_options()`.
+
 ## Functions and views
 
 | Object | Purpose | Security |

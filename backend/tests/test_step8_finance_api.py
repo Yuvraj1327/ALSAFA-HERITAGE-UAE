@@ -94,6 +94,7 @@ def wipe(admin) -> Iterator[None]:
         "pos_settlements",
         "cash_transfers",
         "head_office_expenses",
+        "daily_report_expenses",
         "daily_reports",
         "opening_branch_cash",
         "opening_balances",
@@ -164,12 +165,22 @@ def opening_body(bid, **over) -> dict:
 
 
 def report(admin, branch, d: date, sales: int, cash=0, pos=0, tr=0, link=0, exp=0, sav=0) -> None:
-    admin.execute(
-        """insert into public.daily_reports (report_date, branch_id, total_sales, order_count, cash_received, pos_amount,
-                                             bank_transfer, link_payment, shop_expenses, shop_savings)
-           values (%s,%s,%s,1,%s,%s,%s,%s,%s,%s)""",
-        (d, branch, sales, cash, pos, tr, link, exp, sav),
-    )
+    # `exp` = total shop expenses incl. savings; the rest is one Paid-from-Cash line. The report and its line are
+    # inserted in ONE transaction because the database enforces shop_expenses = SUM(lines) + savings at commit.
+    with admin.transaction():
+        rid = admin.execute(
+            """insert into public.daily_reports (report_date, branch_id, total_sales, order_count, cash_received, pos_amount,
+                                                 bank_transfer, link_payment, shop_expenses, shop_savings)
+               values (%s,%s,%s,1,%s,%s,%s,%s,%s,%s) returning id""",
+            (d, branch, sales, cash, pos, tr, link, exp, sav),
+        ).fetchone()[0]
+        if exp - sav > 0:
+            admin.execute(
+                """insert into public.daily_report_expenses (report_id, branch_id, expense_date, line_no, category,
+                          description, amount, payment_status, payment_account, amount_paid)
+                   values (%s,%s,%s,1,'Other','seed expense',%s,'Paid','Cash',%s)""",
+                (rid, branch, d, exp - sav, exp - sav),
+            )
 
 
 @pytest.fixture()
@@ -1157,9 +1168,9 @@ def test_branch_user_has_no_database_access_to_finance_tables(golden, app_url, b
         "opening_branch_cash",
         "suppliers",
     ):
-        assert (
-            s.execute(text(f"select count(*) from public.{t}")).scalar() == 0
-        ), t  # RLS hides every row
+        assert s.execute(text(f"select count(*) from public.{t}")).scalar() == 0, (
+            t
+        )  # RLS hides every row
     from sqlalchemy.exc import DBAPIError
 
     for fn in (

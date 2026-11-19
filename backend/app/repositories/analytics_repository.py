@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.repositories.base import BaseRepository
-from app.repositories.report_repository import _ACTIVE, _BRANCH_FILTER, _SUMS
+from app.repositories.report_repository import _ACTIVE, _BRANCH_FILTER, _LINES, _SUMS
 
 Row = dict[str, Any]
 
@@ -24,7 +24,7 @@ class AnalyticsRepository(BaseRepository):
     # ---- daily reports (the Step 7 sums, optionally for one branch) -------------------------------------
     def daily_by_day(self, branch: uuid.UUID | None, d_from: date, d_to: date) -> dict[date, Row]:
         rows = self._all(
-            f"select r.report_date, {_SUMS} from public.daily_reports r"  # noqa: S608
+            f"select r.report_date, {_SUMS} from public.daily_reports r {_LINES}"  # noqa: S608
             f" where {_ACTIVE} and {_BRANCH_FILTER} and r.report_date between :f and :t group by r.report_date",
             {"b": branch, "f": d_from, "t": d_to},
         )

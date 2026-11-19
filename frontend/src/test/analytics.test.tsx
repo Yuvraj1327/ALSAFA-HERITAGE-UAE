@@ -45,6 +45,18 @@ const CATALOG = [
     title: 'Account transaction history',
     description: 'Ledger.',
   },
+  {
+    key: 'shop_expenses_by_category',
+    category: 'Expenses & Savings',
+    title: 'Shop expenses by category',
+    description: 'Per category.',
+  },
+  {
+    key: 'ho_expenses',
+    category: 'Expenses & Savings',
+    title: 'Head office expense history',
+    description: 'Head office.',
+  },
   { key: 'activity', category: 'Activity', title: 'Activity history', description: 'Audit.' },
 ]
 const OVERVIEW = {
@@ -61,6 +73,14 @@ const OVERVIEW = {
     not_yet_received: '300.00',
     balance_status: 'ok',
     balance_date: '2026-11-10',
+    total_shop_expenses: '270.00',
+    shop_expenses_paid: '190.00',
+    shop_expenses_unpaid: '60.00',
+    shop_partial_payments: '30.00',
+    shop_expenses_outstanding: '80.00',
+    net_cash_period: '510.00',
+    net_cash_in_hand: '9100.00',
+    supplier_outstanding: '640.00',
   },
   notes: ['Cash and bank balances are company-wide.'],
   generated_at: '2026-11-10T08:00:00Z',
@@ -235,6 +255,53 @@ describe('Reports & Analytics page', () => {
       period: 'day',
     })
     expect(ov.params).not.toHaveProperty('branch_id')
+  })
+
+  it('shows paid / outstanding shop expenses, supplier outstanding and net cash in hand', async () => {
+    api(PROFILE_OWNER)
+    renderApp('/reports')
+    const kpis = await screen.findByLabelText('Key figures')
+    await waitFor(() => expect(within(kpis).getByText(/190\.00/)).toBeInTheDocument())
+    for (const label of [
+      'Paid Shop Expenses',
+      'Shop Expenses Outstanding',
+      'Supplier Outstanding',
+      'Net Cash in Hand',
+    ])
+      expect(within(kpis).getByText(label)).toBeInTheDocument()
+    expect(within(kpis).getByText(/640\.00/)).toBeInTheDocument()
+    expect(within(kpis).getByText(/9,100\.00/)).toBeInTheDocument()
+  })
+
+  it('shop expense reports get category and payment-status filters that reach the API (and the export)', async () => {
+    const calls = api(PROFILE_OWNER)
+    const user = userEvent.setup()
+    renderApp('/reports')
+    await user.click(await screen.findByRole('tab', { name: 'Expenses & Savings' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Report' }))
+    await user.click(await screen.findByRole('option', { name: 'Shop expenses by category' }))
+    const filters = await screen.findByLabelText('Shop expense filters')
+    await user.click(within(filters).getByRole('combobox', { name: 'Expense category' }))
+    await user.click(await screen.findByRole('option', { name: 'Petrol' }))
+    await user.click(within(filters).getByRole('combobox', { name: 'Payment status' }))
+    await user.click(await screen.findByRole('option', { name: 'Unpaid' }))
+    await waitFor(() => {
+      const last = calls.filter((c) => c.url === '/reports/shop_expenses_by_category').at(-1)!
+      expect(last.params).toMatchObject({ category: 'Petrol', status: 'Unpaid' })
+    })
+    await user.click(screen.getByRole('button', { name: /CSV/ }))
+    await waitFor(() => {
+      const exp = calls.find((c) => c.url === '/reports/shop_expenses_by_category/export')!
+      expect(exp.params).toMatchObject({ category: 'Petrol', status: 'Unpaid', format: 'csv' })
+    })
+    // switching to a report that has no such filters hides them and stops sending them
+    await user.click(screen.getByRole('combobox', { name: 'Report' }))
+    await user.click(await screen.findByRole('option', { name: 'Head office expense history' }))
+    expect(screen.queryByLabelText('Shop expense filters')).not.toBeInTheDocument()
+    await waitFor(() => {
+      const last = calls.filter((c) => c.url === '/reports/ho_expenses').at(-1)!
+      expect(last.params).not.toHaveProperty('category')
+    })
   })
 
   it('applies a quick range to the KPIs and the report', async () => {

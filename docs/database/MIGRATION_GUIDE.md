@@ -39,3 +39,18 @@
 
 ## Notes
 `security_invoker` views need PostgreSQL 15+ (Supabase supports it). Extensions are not required (`gen_random_uuid()` is built in).
+
+
+## 0021 — itemised shop expenses (manual deployment steps)
+Additive; touches no existing row's values. **Do not run it first on production.**
+1. **Back up** the database (Supabase: take a backup / point-in-time marker) and run the migration on a **copy** first.
+2. Apply `0021_itemised_shop_expenses.sql` as the migration owner, **as one script** (`psql --single-transaction -f 0021_itemised_shop_expenses.sql`, or paste the whole file in one SQL-editor run). Sent as one script it is a single transaction: a failure at any point (even after the last statement) rolls everything back — verified by `test_a_failure_at_any_point_rolls_back_the_whole_migration`. Do not run it statement by statement.
+3. If it stops with *"These daily reports do not reconcile…"*, nothing was changed. Review the listed report ids (their "Other" items exceed
+   `shop_expenses − shop_savings`), correct them through the Owner edit screen on the old version or in SQL with an audit reason, and re-run.
+4. Verify (as the Owner, same result expected before and after): `select * from public.app_balances();`, `select * from public.app_branch_cash();`,
+   `select * from public.v_supplier_outstanding;` and `select count(*) from public.daily_report_expenses where is_legacy;`.
+   Reconcile check: `select count(*) from public.daily_reports r where voided_at is null and shop_expenses <> shop_savings + (select coalesce(sum(amount),0) from public.daily_report_expenses where report_id=r.id and voided_at is null);` must be 0.
+5. Deploy the **backend and frontend of the same release** together. The API contract changed (breaking): `shop_expenses`/`other_expenses` are no longer accepted
+   on `POST/PUT /daily-reports`, `GET /expenses/other` is replaced by `GET /expenses/shop`, and `edit_daily_report` has a new signature.
+6. No new roles, extensions or secrets are needed. `app_api` keeps its existing grants (the new functions/table are granted to `authenticated`, which `app_api` is a member of).
+Rollback: restore the backup. (The migration is not reversible in place because new reports may already use the new rows.)

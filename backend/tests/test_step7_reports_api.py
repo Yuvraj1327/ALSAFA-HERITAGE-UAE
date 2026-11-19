@@ -112,7 +112,15 @@ def body(d: date, **over: object) -> dict[str, object]:
         "pos_amount": "200.00",
         "bank_transfer": "100.00",
         "link_payment": "50.00",
-        "shop_expenses": "300.00",
+        "expenses": [
+            {
+                "category": "Food",
+                "description": "Staff lunch",
+                "amount": "200.00",
+                "payment_status": "Paid",
+                "payment_account": "Cash",
+            }
+        ],
         "shop_savings": "100.00",
     }
     base.update(over)
@@ -128,12 +136,23 @@ def insert(
     exp: int = 0,
     sav: int = 0,
 ):
-    return admin.execute(
-        """insert into public.daily_reports (report_date, branch_id, total_sales, order_count, cash_received,
-                                             shop_expenses, shop_savings)
-           values (%s,%s,%s,1,%s,%s,%s) returning id""",
-        (d, branch, sales, sales if cash is None else cash, exp, sav),
-    ).fetchone()[0]
+    """Seed a report. `exp` is the TOTAL shop expenses incl. savings (as before); the part that is not savings is stored
+    as one Paid-from-Cash line so the database rule shop_expenses = SUM(lines) + savings holds."""
+    with admin.transaction():  # report + line together: the database checks the totals at commit
+        rid = admin.execute(
+            """insert into public.daily_reports (report_date, branch_id, total_sales, order_count, cash_received,
+                                                 shop_expenses, shop_savings)
+               values (%s,%s,%s,1,%s,%s,%s) returning id""",
+            (d, branch, sales, sales if cash is None else cash, exp, sav),
+        ).fetchone()[0]
+        if exp - sav > 0:
+            admin.execute(
+                """insert into public.daily_report_expenses (report_id, branch_id, expense_date, line_no, category,
+                          description, amount, payment_status, payment_account, amount_paid)
+                   values (%s,%s,%s,1,'Other','seed expense',%s,'Paid','Cash',%s)""",
+                (rid, branch, d, exp - sav, exp - sav),
+            )
+    return rid
 
 
 # ---- submit / validation --------------------------------------------------------------------------------
@@ -188,7 +207,7 @@ def test_owner_must_choose_an_active_branch(client, key, owner) -> None:
         {"cash_received": "-1"},
         {"pos_amount": "-0.01"},
         {"total_sales": "10.123"},
-        {"shop_savings": "400.00", "shop_expenses": "300.00"},
+        {"shop_expenses": "300.00"},  # the old total field is refused: totals are computed
         {"order_count": -1},
         {"unknown_field": 1},
     ],

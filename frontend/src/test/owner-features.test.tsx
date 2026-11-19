@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { reportFormSchema, shopExpensesTotal } from '@/schemas/reports'
+import { expenseTotals, reportFormSchema, shopExpensesTotal } from '@/schemas/reports'
 import { userEditSchema } from '@/schemas/users'
 import { createFakeSupabase, makeSession } from '@/test/fake-supabase'
 import {
@@ -28,7 +28,6 @@ const BLANKS = {
   pos_amount: '',
   bank_transfer: '',
   link_payment: '',
-  shop_expenses: '',
   shop_savings: '',
 }
 const PW = 'Str0ngPassw0rd!'
@@ -36,7 +35,7 @@ const BRANCHES = [
   { id: 'b1', name: 'Test Branch One', sort_order: 1, is_active: true },
   { id: 'b2', name: 'Test Branch Two', sort_order: 2, is_active: true },
 ]
-const REPORT = { ...REPORT_SAMPLE, other_expenses: [], other_expenses_total: '0.00' }
+const REPORT = { ...REPORT_SAMPLE }
 const USER = {
   user_id: 'u9',
   full_name: 'Branch Person',
@@ -45,17 +44,38 @@ const USER = {
   is_active: true,
   created_at: '2026-11-10T06:00:00Z',
 }
-const OTHER_PAGE = {
+const T0 = {
+  lines: 2,
+  total: '200.00',
+  paid: '120.00',
+  outstanding: '80.00',
+  unpaid_amount: '80.00',
+  unpaid_lines: 1,
+  partial_paid: '0.00',
+  partial_lines: 0,
+  cash_paid: '120.00',
+  bank_paid: '0.00',
+}
+const SHOP_PAGE = {
   items: [
     {
-      id: 'r1:1',
+      id: 'e1',
       report_id: 'r1',
       expense_date: '2026-11-09',
       branch_id: 'b1',
       branch_name: 'Test Branch One',
+      line_no: 1,
+      category: 'Repairs & Maintenance',
       description: 'Gas cylinder',
       amount: '45.00',
-      notes: 'urgent',
+      remarks: 'urgent',
+      supplier_id: 's1',
+      supplier_name: 'Fresh Chem LLC',
+      payment_status: 'Partial',
+      payment_account: 'Cash',
+      amount_paid: '20.00',
+      outstanding: '25.00',
+      is_legacy: false,
       recorded_by: 'Test Branch User',
       recorded_at: '2026-11-09T10:00:00Z',
     },
@@ -63,7 +83,15 @@ const OTHER_PAGE = {
   total: 1,
   page: 1,
   page_size: 25,
-  total_amount: '45.00',
+  totals: T0,
+}
+const SHOP_SUMMARY = {
+  totals: T0,
+  by_category: [{ ...T0, label: 'Food' }],
+  by_branch: [{ ...T0, label: 'Test Branch One', branch_id: 'b1' }],
+  by_date: [{ ...T0, label: '2026-11-09' }],
+  by_supplier: [{ ...T0, label: 'Fresh Chem LLC' }],
+  by_status: [{ ...T0, label: 'Unpaid' }],
 }
 
 type Extra = (
@@ -91,8 +119,17 @@ function api(profile: object, extra?: Extra) {
         return { status: 200, body: { ...USER, email: 'person@example.com' } }
       case '/expenses/categories':
         return { status: 200, body: [] }
-      case '/expenses/other':
-        return { status: 200, body: OTHER_PAGE }
+      case '/expenses/shop':
+        return { status: 200, body: SHOP_PAGE }
+      case '/expenses/shop/summary':
+        return { status: 200, body: SHOP_SUMMARY }
+      case '/suppliers':
+        return {
+          status: 200,
+          body: { items: [], total: 0, page: 1, page_size: 100 },
+        }
+      case '/daily-reports/supplier-options':
+        return { status: 200, body: [{ id: 's1', name: 'Fresh Chem LLC' }] }
       default:
         return { status: 200, body: profile }
     }
@@ -113,12 +150,15 @@ beforeEach(() => {
   })) as never
 })
 
-describe('Other expense totals (pure)', () => {
-  it('adds Other items to the regular shop expenses exactly, in fils', () => {
-    expect(shopExpensesTotal('100.10', [{ amount: '0.20' }, { amount: '50' }])).toBe('150.30')
-    expect(shopExpensesTotal('', [])).toBe('0.00')
+describe('Shop expense totals (pure)', () => {
+  it('Total Shop Expenses = sum of itemised amounts + savings, exactly, in fils', () => {
+    expect(
+      shopExpensesTotal([{ amount: '100.10' }, { amount: '0.20' }, { amount: '50' }], '10'),
+    ).toBe('160.30')
+    expect(shopExpensesTotal([], '')).toBe('0.00')
+    expect(expenseTotals([{ amount: '10', payment_status: 'Paid' }], '5').total).toBe('15.00')
   })
-  it('savings are checked against the total including Other items', () => {
+  it('savings are separate: they are not limited by, nor part of, the itemised rows', () => {
     const schema = reportFormSchema({ needsBranch: false, today: '2026-11-09' })
     const base = {
       ...BLANKS,
@@ -126,17 +166,24 @@ describe('Other expense totals (pure)', () => {
       branch_id: '',
       total_sales: '1000',
       order_count: '1',
-      shop_expenses: '10',
       shop_savings: '30',
-      other_expenses: [{ description: 'Gas', amount: '25' }],
+      expenses: [
+        {
+          category: 'Food',
+          description: 'Gas',
+          amount: '25',
+          payment_status: 'Paid',
+          payment_account: 'Cash',
+        },
+      ],
     }
-    expect(schema.safeParse(base).success).toBe(true) // 30 <= 10 + 25
-    expect(schema.safeParse({ ...base, shop_savings: '36' }).success).toBe(false)
+    expect(schema.safeParse(base).success).toBe(true)
+    expect(schema.safeParse({ ...base, shop_savings: '3000' }).success).toBe(true)
     expect(
-      schema.safeParse({ ...base, other_expenses: [{ description: ' ', amount: '5' }] }).success,
+      schema.safeParse({ ...base, expenses: [{ ...base.expenses[0], description: ' ' }] }).success,
     ).toBe(false)
     expect(
-      schema.safeParse({ ...base, other_expenses: [{ description: 'x', amount: '0' }] }).success,
+      schema.safeParse({ ...base, expenses: [{ ...base.expenses[0], amount: '0' }] }).success,
     ).toBe(false)
   })
   it('edit requires a reason of 3+ characters', () => {
@@ -154,7 +201,7 @@ describe('Other expense totals (pure)', () => {
 })
 
 describe('Edit daily report (Owner)', () => {
-  it('requires a reason, then a confirmation, then sends PUT with the total and Other items', async () => {
+  it('opens with the existing expense rows; requires a reason, a confirmation, then sends PUT with the rows', async () => {
     const calls = api(PROFILE_OWNER, (url, c) =>
       url === '/daily-reports/r1' && c.method === 'put' ? { status: 200, body: REPORT } : undefined,
     )
@@ -162,26 +209,72 @@ describe('Edit daily report (Owner)', () => {
     renderApp('/daily-reports')
     await user.click(await screen.findByRole('button', { name: /Edit report/ }))
     const dialog = await screen.findByRole('dialog', { name: 'Edit daily report' })
-    await user.click(within(dialog).getByRole('button', { name: 'Add other expense' }))
-    await user.type(within(dialog).getByLabelText('Description'), 'Gas')
-    const amounts = within(dialog).getAllByLabelText('Amount (AED)')
-    await user.type(amounts[0]!, '25')
+    const rows = within(dialog).getAllByRole('group', { name: /^Expense row \d+$/ })
+    expect(rows).toHaveLength(2) // the stored rows, not a single total
+    expect(within(rows[0]!).getByLabelText('Description')).toHaveValue('Staff lunch')
+    expect(within(rows[1]!).getByLabelText(/Outstanding Amount/)).toHaveValue('80.00')
+    const amount = within(rows[0]!).getByLabelText('Amount (AED)')
+    await user.clear(amount)
+    await user.type(amount, '150')
+    expect(within(dialog).getByTestId('itemised-total')).toHaveTextContent('230.00') // 150 + 80
+    expect(within(dialog).getByTestId('shop-expenses-total')).toHaveTextContent('330.00') // + 100 savings
 
     await user.click(within(dialog).getByRole('button', { name: 'Save changes' }))
     expect(await within(dialog).findByText(/Enter a reason/)).toBeInTheDocument()
     expect(calls.some((c) => c.method === 'put')).toBe(false)
 
-    await user.type(within(dialog).getByLabelText(/Reason for change/), 'Added gas')
+    await user.type(within(dialog).getByLabelText(/Reason for change/), 'Lunch was 150')
     await user.click(within(dialog).getByRole('button', { name: 'Save changes' }))
     const confirm = await screen.findByRole('alertdialog')
     expect(within(confirm).getByText('Save changes?')).toBeInTheDocument()
+    expect(confirm).toHaveTextContent('supplier dues and payments')
     expect(calls.some((c) => c.method === 'put')).toBe(false) // nothing sent before confirming
     await user.click(within(confirm).getByRole('button', { name: 'Confirm and save' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'put')).toBe(true))
     const body = JSON.parse(calls.find((c) => c.method === 'put')!.data as string)
-    expect(body.shop_expenses).toBe('325.00') // 300 regular + 25 other
-    expect(body.other_expenses).toEqual([{ description: 'Gas', amount: '25' }])
-    expect(body.reason).toBe('Added gas')
+    expect(body).not.toHaveProperty('shop_expenses')
+    expect(body.shop_savings).toBe('100.00')
+    expect(body.expenses).toHaveLength(2)
+    expect(body.expenses[0]).toMatchObject({
+      description: 'Staff lunch',
+      amount: '150',
+      amount_paid: '150.00',
+    })
+    expect(body.expenses[1]).toMatchObject({
+      category: 'Raw Material',
+      supplier_id: 's1',
+      payment_status: 'Unpaid',
+      amount_paid: '0.00',
+    })
+    expect(body.reason).toBe('Lunch was 150')
+  })
+
+  it('historical "Other (Legacy)" rows open as Other with a notice', async () => {
+    const legacy = {
+      ...REPORT,
+      expenses: [
+        {
+          ...REPORT.expenses[0]!,
+          id: 'L1',
+          category: 'Other (Legacy)',
+          is_legacy: true,
+          description: 'Unitemised shop expenses (legacy balance)',
+        },
+      ],
+    }
+    api(PROFILE_OWNER, (url) =>
+      url === '/daily-reports'
+        ? { status: 200, body: { items: [legacy], total: 1, page: 1, page_size: 25 } }
+        : undefined,
+    )
+    const user = userEvent.setup()
+    renderApp('/daily-reports')
+    await user.click(await screen.findByRole('button', { name: /Edit report/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Edit daily report' })
+    expect(within(dialog).getByRole('note')).toHaveTextContent('Other (Legacy)')
+    expect(within(dialog).getByRole('combobox', { name: /Expense Category/ })).toHaveTextContent(
+      'Other',
+    )
   })
 
   it('a Branch User sees no Edit button', async () => {
@@ -271,23 +364,71 @@ describe('Edit user (Owner)', () => {
   })
 })
 
-describe('Other Expenses tab', () => {
-  it('lists the items and sends branch, date and search filters', async () => {
+describe('Shop Expenses tab', () => {
+  it('lists the itemised rows and sends branch, category, status, date and search filters', async () => {
     const calls = api(PROFILE_OWNER)
     const user = userEvent.setup()
     renderApp('/expenses')
-    await user.click(await screen.findByRole('tab', { name: 'Other Expenses' }))
-    const table = await screen.findByRole('table', { name: 'Other expenses' })
-    for (const h of ['Date', 'Branch', 'Expense Description', 'Amount', 'Recorded By', 'Notes']) {
+    await user.click(await screen.findByRole('tab', { name: 'Shop expenses' }))
+    const table = await screen.findByRole('table', { name: 'Itemised shop expenses' })
+    for (const h of [
+      'Date',
+      'Branch',
+      'Category',
+      'Description',
+      'Supplier',
+      'Status',
+      'Paid from',
+      'Amount',
+      'Paid',
+      'Outstanding',
+      'Remarks',
+    ]) {
       expect(within(table).getByText(h)).toBeInTheDocument()
     }
     expect(await within(table).findByText('Gas cylinder')).toBeInTheDocument()
-    await user.type(screen.getByLabelText('Search description or notes'), 'gas')
-    await user.click(screen.getByRole('combobox', { name: 'Other expenses branch' }))
+    expect(within(table).getByText('Fresh Chem LLC')).toBeInTheDocument()
+    expect(within(table).getByText('Partial')).toBeInTheDocument()
+    expect(within(table).getByText('Repairs & Maintenance')).toBeInTheDocument()
+    // summary cards come from the server's totals
+    const cards = screen.getByLabelText('Shop expense totals')
+    expect(cards).toHaveTextContent('200.00')
+    expect(cards).toHaveTextContent('80.00')
+
+    await user.type(screen.getByLabelText('Search description, remarks or supplier'), 'gas')
+    await user.click(screen.getByRole('combobox', { name: 'Shop expenses branch' }))
     await user.click(await screen.findByRole('option', { name: 'Test Branch Two' }))
+    await user.click(screen.getByRole('combobox', { name: 'Shop expenses category' }))
+    await user.click(await screen.findByRole('option', { name: 'Petrol' }))
+    await user.click(screen.getByRole('combobox', { name: 'Shop expenses payment status' }))
+    await user.click(await screen.findByRole('option', { name: 'Unpaid' }))
     await waitFor(() => {
-      const last = calls.filter((c) => c.url === '/expenses/other').at(-1)!
-      expect(last.params).toMatchObject({ q: 'gas', branch_id: 'b2' })
+      const last = calls.filter((c) => c.url === '/expenses/shop').at(-1)!
+      expect(last.params).toMatchObject({
+        q: 'gas',
+        branch_id: 'b2',
+        category: 'Petrol',
+        status: 'Unpaid',
+      })
     })
+  })
+
+  it('shows category-, branch-, date-, supplier- and status-wise breakdowns', async () => {
+    api(PROFILE_OWNER)
+    const user = userEvent.setup()
+    renderApp('/expenses')
+    await user.click(await screen.findByRole('tab', { name: 'Shop expenses' }))
+    for (const [tab, caption, label] of [
+      ['By category', 'Shop expenses by category', 'Food'],
+      ['By branch', 'Shop expenses by branch', 'Test Branch One'],
+      ['By date', 'Shop expenses by date', '2026-11-09'],
+      ['By supplier', 'Shop expenses by supplier', 'Fresh Chem LLC'],
+      ['By payment status', 'Shop expenses by payment status', 'Unpaid'],
+    ] as const) {
+      await user.click(screen.getByRole('tab', { name: tab }))
+      const t = await screen.findByRole('table', { name: caption })
+      expect(await within(t).findByText(label)).toBeInTheDocument()
+      expect(within(t).getByText('Outstanding')).toBeInTheDocument()
+    }
   })
 })

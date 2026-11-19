@@ -10,7 +10,8 @@ import {
   expenseSchema,
   ledgerPageSchema,
   openingBalancesSchema,
-  otherExpensePageSchema,
+  shopExpensePageSchema,
+  shopSummarySchema,
   settlementSchema,
   supplierEntryPageSchema,
   supplierEntrySchema,
@@ -193,13 +194,20 @@ export const addSupplierDue = (
   p: { entry_date: string; amount: string; reference?: string; note?: string; client_key: string },
 ) => send('post', `/suppliers/${id}/dues`, supplierEntrySchema, p)
 
-export interface OtherExpenseFilters {
+export interface ShopExpenseFilters {
   date_from?: string
   date_to?: string
   branch_id?: string
+  category?: string
+  supplier_id?: string
+  status?: string
   q?: string
+}
+export interface ShopExpensePageFilters extends ShopExpenseFilters {
   page: number
   page_size: number
 }
-export const listOtherExpenses = (f: OtherExpenseFilters) =>
-  get('/expenses/other', otherExpensePageSchema, { ...f })
+export const listShopExpenses = (f: ShopExpensePageFilters) =>
+  get('/expenses/shop', shopExpensePageSchema, { ...f })
+export const getShopSummary = (f: ShopExpenseFilters) =>
+  get('/expenses/shop/summary', shopSummarySchema, { ...f })

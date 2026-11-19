@@ -40,6 +40,11 @@ Report rules: date and sales > 0 required; savings cannot exceed shop expenses; 
 | Sales minus expenses | sales − shop expenses (excl. savings) − head office expenses (excl. savings) |
 | Savings total | savings brought forward + shop savings + head office savings, entries on/after start date |
 
+**Shop expenses (0021):** itemised rows per daily report — categories Food, Raw Material, Stationery, Repairs & Maintenance, Petrol, Other (Savings is a separate field, never a category).
+Total Shop Expenses = Σ itemised amounts + Savings. Statuses Paid / Unpaid / Partial; Unpaid and Partial need a supplier and create the supplier due
+(plus a payment for the amount paid). Expenses count in Sales Minus Expenses when **incurred** (credit purchases included); only amounts **paid** move Cash/ENBD/ADCB.
+Net cash = cash received − cash paid expenses − savings. Full rules: `docs/finance/ITEMISED_SHOP_EXPENSES.md`.
+
 Head office expense: categories fixed list of 7 (Detergent & chemicals, Utilities, Rent, Repairs, Transport, Packaging, Salaries); paid from Cash received, ENBD or ADCB; branch optional ("All"); can be marked/unmarked as saving.
 **[AMBIGUOUS]** Savings are never withdrawn (D21).
 
@@ -53,8 +58,8 @@ Head office expense: categories fixed list of 7 (Detergent & chemicals, Utilitie
 
 | Calculation | Formula |
 |---|---|
-| Cash now | opening cash (sum of branches) + cash received − shop expenses (**including** savings) − head office paid from "Cash received" |
-| Bank now, per bank | opening balance + (POS + transfers + links, only for the receiving bank) − head office paid from that bank − rent cheques cleared on that bank |
+| Cash now | opening cash (sum of branches) + gross cash received − **shop expenses actually paid in cash** − savings − supplier payments in cash − head office paid from "Cash received" ± transfers (0021: see `docs/finance/ITEMISED_SHOP_EXPENSES.md`; unpaid expenses never reduce cash) |
+| Bank now, per bank | opening balance + collections to the receiving bank − shop expenses and supplier payments actually paid from that bank − head office paid from that bank − rent cheques cleared on that bank ± transfers + POS settlements |
 | Total cash + banks | cash now + ENBD now + ADCB now |
 | Cheque timing | cheques count on their cheque date |
 | Cash board closing (any period) | opening (balance the day before the period) + the period's flows |

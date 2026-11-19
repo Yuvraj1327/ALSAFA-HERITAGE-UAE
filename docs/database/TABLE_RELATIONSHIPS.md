@@ -31,3 +31,9 @@ opening_balances: single row (id = 1), no relations
 ```
 
 Derived, not stored: reconciliation difference, balances, savings total, visa/passport status, alerts.
+
+
+## 0021
+`daily_reports 1—* daily_report_expenses` (report_id, restrict); `branches 1—* daily_report_expenses`; `suppliers 0..1—* daily_report_expenses`;
+`daily_report_expenses 1—0..2 supplier_entries` (`source_expense_id`: one due, and one payment when something was paid at the time).
+Supplier outstanding is unchanged: `suppliers.amount_owed + Σ due − Σ payment` over non-voided `supplier_entries`.

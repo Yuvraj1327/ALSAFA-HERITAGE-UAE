@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import { DataTable, type DataTableColumn } from '@/components/common/data-table'
+import { Button } from '@/components/ui/button'
+import { ExpenseItemsDialog } from './expense-items-dialog'
 import { StatusBadge } from '@/components/common/status-badge'
 import type { DailyReport } from '@/schemas/reports'
 import { formatAED, formatDate } from '@/utils/format'
@@ -6,6 +9,7 @@ import { formatAED, formatDate } from '@/utils/format'
 /** Difference = Total Sales − Total Collections, computed by the API. Matches/Diff is the server's verdict. */
 function reportColumns(
   extra?: (r: DailyReport) => React.ReactNode,
+  onItems?: (r: DailyReport) => void,
 ): DataTableColumn<DailyReport>[] {
   const cols: DataTableColumn<DailyReport>[] = [
     {
@@ -43,7 +47,33 @@ function reportColumns(
       align: 'right',
       cell: (r) => formatAED(r.shop_expenses),
     },
+    {
+      key: 'items',
+      header: 'Expense Items',
+      cell: (r) =>
+        r.expenses.length === 0 || !onItems ? (
+          '—'
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onItems(r)}
+            aria-label={`View expense items for ${r.branch_name} ${r.report_date}`}
+          >
+            {r.expenses.length} {r.expenses.length === 1 ? 'item' : 'items'}
+            {Number(r.expenses_outstanding) > 0
+              ? ` · ${formatAED(r.expenses_outstanding)} due`
+              : ''}
+          </Button>
+        ),
+    },
     { key: 'savings', header: 'Savings', align: 'right', cell: (r) => formatAED(r.shop_savings) },
+    {
+      key: 'netcash',
+      header: 'Net Cash',
+      align: 'right',
+      cell: (r) => formatAED(r.net_cash),
+    },
     {
       key: 'difference',
       header: 'Difference',
@@ -74,14 +104,18 @@ interface ReportsTableProps {
 }
 
 export function ReportsTable({ rows, extra, ...rest }: ReportsTableProps) {
+  const [viewing, setViewing] = useState<DailyReport | null>(null)
   return (
-    <DataTable
-      columns={reportColumns(extra)}
-      rows={rows}
-      getRowId={(r) => r.id}
-      emptyTitle="No reports found"
-      emptyDescription="No daily reports match these filters."
-      {...rest}
-    />
+    <>
+      <DataTable
+        columns={reportColumns(extra, setViewing)}
+        rows={rows}
+        getRowId={(r) => r.id}
+        emptyTitle="No reports found"
+        emptyDescription="No daily reports match these filters."
+        {...rest}
+      />
+      <ExpenseItemsDialog report={viewing} onClose={() => setViewing(null)} />
+    </>
   )
 }

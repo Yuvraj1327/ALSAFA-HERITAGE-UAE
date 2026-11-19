@@ -15,7 +15,8 @@ CATEGORIES = {"Detergent & chemicals", "Utilities", "Rent", "Repairs", "Transpor
 APP_TABLES = {"branches", "expense_categories", "profiles", "opening_balances", "opening_branch_cash",
               "daily_reports", "head_office_expenses", "suppliers", "employees", "tasks", "trade_licenses",
               "rental_agreements", "pdc_cheques", "audit_log",
-              "supplier_entries", "pos_settlements", "cash_transfers", "license_renewals", "alerts", "service_categories", "customers", "orders", "order_payments", "order_status_history"}
+              "supplier_entries", "pos_settlements", "cash_transfers", "license_renewals", "alerts", "service_categories", "customers", "orders", "order_payments", "order_status_history",
+              "user_preferences", "daily_report_expenses"}
 
 
 def cheques(n, rent, bank="ENBD", first="2026-10-01", prefix="C"):

@@ -109,7 +109,7 @@ def _individual_page(r: DailyReportOut, st: dict[str, ParagraphStyle], width: fl
         ("Bank Transfers", aed(r.bank_transfer)),
         ("Payment Link Collections", aed(r.link_payment)),
         ("Total Collections", aed(received)),
-        ("Shop Expenses", aed(r.shop_expenses)),
+        ("Shop Expenses (itemised + savings)", aed(r.shop_expenses)),
         ("Savings", aed(r.shop_savings)),
         ("Not Yet Received", aed(calc.not_yet_received(r.total_sales, received))),
         ("Reconciliation Difference", f"{aed(diff)}  ({verdict})"),
@@ -139,39 +139,81 @@ def _individual_page(r: DailyReportOut, st: dict[str, ParagraphStyle], width: fl
         Spacer(1, 8),
         t,
     ]
-    if r.other_expenses:
+    if r.expenses:
         white = ParagraphStyle(
             "w", parent=st["small"], textColor=colors.white, fontName="Helvetica-Bold"
         )
         whiter = ParagraphStyle("wr", parent=white, alignment=2)
-        det = [[_p("Other expense", white), _p("Notes", white), _p("Amount", whiter)]]
-        det += [
+        det = [
             [
-                _p(i.description, st["small"]),
-                _p(i.notes or "", st["small"]),
-                _p(aed(i.amount), st["smallr"]),
+                _p("Category", white),
+                _p("Description / supplier", white),
+                _p("Status", white),
+                _p("Amount", whiter),
+                _p("Paid", whiter),
+                _p("Outstanding", whiter),
             ]
-            for i in r.other_expenses
         ]
+        for ex in r.expenses:
+            who = ex.description
+            if ex.supplier_name:
+                who += f" — {ex.supplier_name}"
+            if ex.remarks:
+                who += f" ({ex.remarks})"
+            status = ex.payment_status + (f" · {ex.payment_account}" if ex.payment_account else "")
+            det.append(
+                [
+                    _p(ex.category, st["small"]),
+                    _p(who, st["small"]),
+                    _p(status, st["small"]),
+                    _p(aed(ex.amount), st["smallr"]),
+                    _p(aed(ex.amount_paid), st["smallr"]),
+                    _p(aed(ex.outstanding), st["smallr"]),
+                ]
+            )
         det.append(
             [
-                _p("Total other expenses (included in Shop Expenses)", st["small"]),
+                _p("Total itemised expenses (+ savings = Shop Expenses)", st["small"]),
                 _p("", st["small"]),
-                _p(aed(r.other_expenses_total), st["smallr"]),
+                _p("", st["small"]),
+                _p(aed(r.shop_expenses_excl_savings), st["smallr"]),
+                _p(aed(r.expenses_paid), st["smallr"]),
+                _p(aed(r.expenses_outstanding), st["smallr"]),
             ]
         )
-        dt = Table(det, colWidths=[width * 0.45, width * 0.33, width * 0.22], repeatRows=1)
+        dt = Table(
+            det,
+            colWidths=[
+                width * 0.15,
+                width * 0.32,
+                width * 0.15,
+                width * 0.12,
+                width * 0.13,
+                width * 0.13,
+            ],
+            repeatRows=1,
+        )
         dt.setStyle(
             _ts(
                 [
                     ("GRID", (0, 0), (-1, -1), 0.5, GRID),
                     ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                    ("SPAN", (0, -1), (1, -1)),
+                    ("SPAN", (0, -1), (2, -1)),
                     ("BACKGROUND", (0, -1), (-1, -1), LIGHT),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ]
             )
         )
-        out += [Spacer(1, 10), _p("Other shop expenses", st["h2"]), dt]
+        out += [Spacer(1, 10), _p("Shop expenses (itemised)", st["h2"]), dt]
+        out += [
+            Spacer(1, 6),
+            _p(
+                f"Net cash after actual payments: {aed(r.net_cash)} "
+                f"(cash received {aed(r.cash_received)} − paid in cash {aed(r.cash_paid_expenses)} "
+                f"− savings {aed(r.shop_savings)})",
+                st["small"],
+            ),
+        ]
     return out
 
 

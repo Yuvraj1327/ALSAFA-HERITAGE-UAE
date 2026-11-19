@@ -16,7 +16,8 @@ import {
   type DailyReport,
   type ReportFormInput,
   type ReportFormValues,
-  shopExpensesTotal,
+  expenseTotals,
+  toExpensePayload,
 } from '@/schemas/reports'
 import type { ReportPayload } from '@/services/reports.service'
 import { ReportAmountFields } from './ReportFields'
@@ -33,9 +34,8 @@ const blank = (date: string, branch: string): ReportFormInput => ({
   pos_amount: '',
   bank_transfer: '',
   link_payment: '',
-  shop_expenses: '',
   shop_savings: '',
-  other_expenses: [],
+  expenses: [],
   reason: '',
 })
 
@@ -71,14 +71,9 @@ export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => v
       pos_amount: values.pos_amount,
       bank_transfer: values.bank_transfer,
       link_payment: values.link_payment,
-      // shop_expenses is the TOTAL (regular + Other items); the items are sent as its breakdown.
-      shop_expenses: shopExpensesTotal(values.shop_expenses, values.other_expenses),
       shop_savings: values.shop_savings,
-      other_expenses: values.other_expenses.map((i) => ({
-        description: i.description,
-        amount: i.amount,
-        ...(i.notes ? { notes: i.notes } : {}),
-      })),
+      // Total shop expenses is NOT sent: the server computes it (itemised expenses + savings).
+      expenses: toExpensePayload(values.expenses),
     }
     try {
       const report = await create.mutateAsync(payload)
@@ -96,12 +91,16 @@ export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => v
           mapped = true
         }
       }
-      if (!mapped || err.code === 'duplicate_report') setFormError(err.message)
+      // Row-level server messages ("expense line 2: …") are shown on the form as well as in the toast.
+      if (!mapped || err.code === 'duplicate_report' || 'expenses' in err.fields) {
+        setFormError(err.fields.expenses?.[0] ?? err.message)
+      }
       toast.error(err.message)
     }
   }
 
   const draft = pending
+  const draftTotals = draft ? expenseTotals(draft.expenses, draft.shop_savings) : null
   const received = draft
     ? ['cash_received', 'pos_amount', 'bank_transfer', 'link_payment'].reduce(
         (sum, k) => sum + Number(draft[k as keyof ReportFormValues]),
@@ -219,10 +218,18 @@ export function ReportForm({ onSubmitted }: { onSubmitted: (r: DailyReport) => v
                 <dd className="font-medium">{formatAED(draft.total_sales)}</dd>
                 <dt className="text-muted-foreground">Collections entered</dt>
                 <dd className="font-medium">{formatAED(received)}</dd>
-                <dt className="text-muted-foreground">Shop Expenses (incl. Other) / Savings</dt>
+                <dt className="text-muted-foreground">
+                  Itemised expenses ({draft.expenses.length})
+                </dt>
+                <dd className="font-medium">{formatAED(draftTotals?.itemised ?? '0')}</dd>
+                <dt className="text-muted-foreground">Savings</dt>
+                <dd className="font-medium">{formatAED(draft.shop_savings)}</dd>
+                <dt className="text-muted-foreground">Total shop expenses</dt>
+                <dd className="font-medium">{formatAED(draftTotals?.total ?? '0')}</dd>
+                <dt className="text-muted-foreground">Paid now / outstanding</dt>
                 <dd className="font-medium">
-                  {formatAED(shopExpensesTotal(draft.shop_expenses, draft.other_expenses))} /{' '}
-                  {formatAED(draft.shop_savings)}
+                  {formatAED(draftTotals?.paid ?? '0')} /{' '}
+                  {formatAED(draftTotals?.outstanding ?? '0')}
                 </dd>
               </dl>
             </div>
@@ -261,6 +268,16 @@ export function SubmittedSummary({ report }: { report: DailyReport }) {
         <div>
           <dt className="text-muted-foreground">Shop Expenses excl. Savings</dt>
           <dd className="tabular font-semibold">{formatAED(report.shop_expenses_excl_savings)}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Paid / outstanding to suppliers</dt>
+          <dd className="tabular font-semibold">
+            {formatAED(report.expenses_paid)} / {formatAED(report.expenses_outstanding)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Net cash after actual payments</dt>
+          <dd className="tabular font-semibold">{formatAED(report.net_cash)}</dd>
         </div>
       </dl>
     </div>

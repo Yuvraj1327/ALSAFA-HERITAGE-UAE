@@ -73,10 +73,17 @@ export const useExpenses = (f: api.ExpenseFilters) =>
     placeholderData: keepPreviousData,
     ...q,
   })
-export const useOtherExpenses = (f: api.OtherExpenseFilters) =>
+export const useShopExpenses = (f: api.ShopExpensePageFilters) =>
   useQuery({
-    queryKey: ['expenses', 'other', f],
-    queryFn: () => api.listOtherExpenses(f),
+    queryKey: ['expenses', 'shop', f],
+    queryFn: () => api.listShopExpenses(f),
+    placeholderData: keepPreviousData,
+    ...q,
+  })
+export const useShopSummary = (f: api.ShopExpenseFilters) =>
+  useQuery({
+    queryKey: ['expenses', 'shop-summary', f],
+    queryFn: () => api.getShopSummary(f),
     placeholderData: keepPreviousData,
     ...q,
   })

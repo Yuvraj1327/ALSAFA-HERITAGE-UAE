@@ -57,6 +57,24 @@ def head_office_excl_savings(head_office_total: Decimal, head_office_savings: De
     return money(head_office_total - head_office_savings)
 
 
+def shop_expenses_total(itemised: Decimal, shop_savings: Decimal) -> Decimal:
+    """Total Shop Expenses (the stored daily_reports.shop_expenses) = SUM(itemised expense amounts) + savings.
+    Savings are a separate field, never an expense category."""
+    return money(itemised + shop_savings)
+
+
+def expense_outstanding(amount: Decimal, amount_paid: Decimal) -> Decimal:
+    """Outstanding on one expense line = amount - amount paid (0 for Paid, the full amount for Unpaid)."""
+    return money(amount - amount_paid)
+
+
+def net_cash(cash_received: Decimal, cash_paid_expenses: Decimal, shop_savings: Decimal) -> Decimal:
+    """Net cash of a branch/day = gross cash received - expenses ACTUALLY paid in cash - savings set aside.
+    Unpaid amounts and amounts paid from ENBD/ADCB do not reduce it. Gross cash received (used for sales
+    reconciliation) is never changed."""
+    return money(cash_received - cash_paid_expenses - shop_savings)
+
+
 def total_savings(shop_savings: Decimal, head_office_savings: Decimal) -> Decimal:
     """Savings for a period = shop savings + head office expenses marked as savings."""
     return money(shop_savings + head_office_savings)

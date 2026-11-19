@@ -1,6 +1,17 @@
 import { apiClient } from '@/lib/api-client'
-import { dailyReportPageSchema, dailyReportSchema, reportHistorySchema } from '@/schemas/reports'
-import type { DailyReport, DailyReportPage, ReportHistoryEntry } from '@/schemas/reports'
+import {
+  dailyReportPageSchema,
+  dailyReportSchema,
+  reportHistorySchema,
+  supplierOptionsSchema,
+} from '@/schemas/reports'
+import type {
+  DailyReport,
+  DailyReportPage,
+  ExpenseLinePayload,
+  ReportHistoryEntry,
+  SupplierOption,
+} from '@/schemas/reports'
 
 export interface ReportPayload {
   report_date: string
@@ -11,15 +22,13 @@ export interface ReportPayload {
   pos_amount: string
   bank_transfer: string
   link_payment: string
-  shop_expenses: string
   shop_savings: string
-  /** shop_expenses is the TOTAL; these items are the "Other" part of it. */
-  other_expenses?: { description: string; amount: string; notes?: string }[]
+  /** Itemised shop expenses. Total shop expenses = SUM(amounts) + shop_savings, computed by the server. */
+  expenses: ExpenseLinePayload[]
 }
 
-export interface ReportEditPayload extends Omit<ReportPayload, 'branch_id' | 'other_expenses'> {
+export interface ReportEditPayload extends Omit<ReportPayload, 'branch_id'> {
   branch_id: string
-  other_expenses: { description: string; amount: string; notes?: string }[]
   reason: string
 }
 
@@ -42,6 +51,12 @@ export interface ReportFilters {
 export async function createDailyReport(payload: ReportPayload): Promise<DailyReport> {
   const { data } = await apiClient.post<unknown>('/daily-reports', payload)
   return dailyReportSchema.parse(data)
+}
+
+/** Active suppliers (id + name only) a Branch User may pick for an expense row. */
+export async function listSupplierOptions(): Promise<SupplierOption[]> {
+  const { data } = await apiClient.get<unknown>('/daily-reports/supplier-options')
+  return supplierOptionsSchema.parse(data)
 }
 
 export async function listDailyReports(filters: ReportFilters): Promise<DailyReportPage> {

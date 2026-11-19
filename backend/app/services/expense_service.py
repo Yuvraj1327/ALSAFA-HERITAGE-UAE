@@ -6,6 +6,8 @@ from app.core import calculations as calc
 from app.core.calculations import money
 from app.core.exceptions import ConflictError, NotFoundError, UnprocessableError
 from app.repositories.finance_repository import API_ACCOUNT, DB_ACCOUNT
+from app.repositories.shop_expense_repository import ShopExpenseRepository
+from app.repositories.shop_expense_repository import filters as shop_filters
 from app.schemas.finance import (
     AuditEntry,
     ExpenseCategoryOut,
@@ -15,10 +17,28 @@ from app.schemas.finance import (
     ExpenseOut,
     ExpensePage,
     ExpenseTotals,
-    OtherExpensePage,
-    OtherExpenseRow,
+    ShopExpenseGroup,
+    ShopExpensePage,
+    ShopExpenseRow,
+    ShopExpenseSummary,
+    ShopExpenseTotals,
 )
 from app.services.finance_core import FinanceCore
+
+
+def shop_totals(r: dict[str, Any]) -> ShopExpenseTotals:
+    return ShopExpenseTotals(
+        lines=int(r["lines"]),
+        total=money(r["total"]),
+        paid=money(r["paid"]),
+        outstanding=calc.expense_outstanding(money(r["total"]), money(r["paid"])),
+        unpaid_amount=money(r["unpaid_amount"]),
+        unpaid_lines=int(r["unpaid_lines"]),
+        partial_paid=money(r["partial_paid"]),
+        partial_lines=int(r["partial_lines"]),
+        cash_paid=money(r["cash_paid"]),
+        bank_paid=money(r["bank_paid"]),
+    )
 
 
 def expense_out(r: dict[str, Any]) -> ExpenseOut:
@@ -88,33 +108,85 @@ class ExpenseService(FinanceCore):
             ),
         )
 
-    def other_expenses(
+    # ---- itemised SHOP expenses (read-only; they live in the daily reports) -------------------------------
+    def _shop_filters(
         self,
         d_from: date | None,
         d_to: date | None,
         branch: uuid.UUID | None,
+        category: str | None,
+        supplier: uuid.UUID | None,
+        status: str | None,
         q: str | None,
-        page: int,
-        page_size: int,
-    ) -> OtherExpensePage:
+    ) -> dict[str, Any]:
         if d_from and d_to and d_from > d_to:
             raise UnprocessableError(
                 "Start date is after end date",
                 fields={"date_from": ["Start date must not be after end date"]},
             )
-        f = {"d_from": d_from, "d_to": d_to, "branch": branch, "q": (q or "").strip() or None}
-        rows, agg = self.fin.other_expenses_page(f, page_size, (page - 1) * page_size)
-        return OtherExpensePage(
+        return shop_filters(d_from, d_to, branch, category, supplier, status, q)
+
+    def shop_expenses(
+        self,
+        d_from: date | None,
+        d_to: date | None,
+        branch: uuid.UUID | None,
+        category: str | None,
+        supplier: uuid.UUID | None,
+        status: str | None,
+        q: str | None,
+        page: int,
+        page_size: int,
+    ) -> ShopExpensePage:
+        f = self._shop_filters(d_from, d_to, branch, category, supplier, status, q)
+        rows, agg = ShopExpenseRepository(self.session).lines_page(
+            f, page_size, (page - 1) * page_size
+        )
+        return ShopExpensePage(
             items=[
-                OtherExpenseRow(
-                    id=f"{r['report_id']}:{r['n']}", **{k: v for k, v in r.items() if k != "n"}
+                ShopExpenseRow(
+                    **{**r, "outstanding": calc.expense_outstanding(r["amount"], r["amount_paid"])}
                 )
                 for r in rows
             ],
-            total=int(agg["n"]),
+            total=int(agg["lines"]),
             page=page,
             page_size=page_size,
-            total_amount=money(agg["total"]),
+            totals=shop_totals(agg),
+        )
+
+    def shop_summary(
+        self,
+        d_from: date | None,
+        d_to: date | None,
+        branch: uuid.UUID | None,
+        category: str | None,
+        supplier: uuid.UUID | None,
+        status: str | None,
+        q: str | None,
+    ) -> ShopExpenseSummary:
+        f = self._shop_filters(d_from, d_to, branch, category, supplier, status, q)
+        repo = ShopExpenseRepository(self.session)
+
+        def groups(name: str) -> list[ShopExpenseGroup]:
+            return [
+                ShopExpenseGroup(label=str(r["label"]), **shop_totals(r).model_dump())
+                for r in repo.breakdown(name, f)
+            ]
+
+        by_branch = [
+            ShopExpenseGroup(
+                label=str(r["label"]), branch_id=r["branch_id"], **shop_totals(r).model_dump()
+            )
+            for r in repo.breakdown_branch_ids(f)
+        ]
+        return ShopExpenseSummary(
+            totals=shop_totals(repo.totals(f)),
+            by_category=groups("category"),
+            by_branch=by_branch,
+            by_date=groups("date"),
+            by_supplier=groups("supplier"),
+            by_status=groups("status"),
         )
 
     def get(self, id_: uuid.UUID) -> ExpenseDetail:

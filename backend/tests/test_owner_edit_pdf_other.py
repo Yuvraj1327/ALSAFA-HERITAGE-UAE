@@ -1,4 +1,4 @@
-"""Owner edits (daily reports, Branch Users), branch-wise PDF export, "Other" shop expenses and the Other Expenses tab.
+"""Owner edits (daily reports, Branch Users), branch-wise PDF export, itemised shop expenses and the Shop Expenses tab.
 Real FastAPI app + real PostgreSQL (all migrations, RLS) as the restricted `app_api` role; Supabase Auth is an
 httpx MockTransport. Dates live in 2025-12 so they never collide with other modules sharing the database."""
 
@@ -123,6 +123,27 @@ def err(r) -> str:
     return r.json()["error"]["code"]
 
 
+def L(
+    category: str,
+    description: str,
+    amount: str,
+    status: str = "Paid",
+    account: str | None = "Cash",
+    **kw,
+):
+    """One itemised expense row as the API expects it."""
+    d: dict[str, object] = {
+        "category": category,
+        "description": description,
+        "amount": amount,
+        "payment_status": status,
+    }
+    if account:
+        d["payment_account"] = account
+    d.update(kw)
+    return d
+
+
 def payload(d: date, branch: uuid.UUID | None = None, **over: object) -> dict[str, object]:
     base: dict[str, object] = {
         "report_date": d.isoformat(),
@@ -132,8 +153,8 @@ def payload(d: date, branch: uuid.UUID | None = None, **over: object) -> dict[st
         "pos_amount": "200.00",
         "bank_transfer": "100.00",
         "link_payment": "50.00",
-        "shop_expenses": "300.00",
-        "shop_savings": "100.00",
+        "expenses": [L("Food", "Staff lunch", "200.00")],
+        "shop_savings": "100.00",  # total shop expenses = 200 itemised + 100 savings = 300
     }
     if branch is not None:
         base["branch_id"] = str(branch)
@@ -171,7 +192,9 @@ def test_owner_edits_report_recalculates_and_audits_who_when_why(
     assert r["total_received"] == "950.00" and r["difference"] == "50.00"
     e = client.put(
         f"{API}/daily-reports/{r['id']}",
-        json=edit_body(d, bid["SATWA"], cash_received="650.00", shop_expenses="320.00"),
+        json=edit_body(
+            d, bid["SATWA"], cash_received="650.00", expenses=[L("Food", "Staff lunch", "220.00")]
+        ),
         headers=h(key, owner),
     )
     assert e.status_code == 200, e.text
@@ -179,7 +202,8 @@ def test_owner_edits_report_recalculates_and_audits_who_when_why(
     assert (
         j["total_received"] == "1000.00" and j["difference"] == "0.00" and j["check"] == "Matches"
     )
-    assert j["shop_expenses_excl_savings"] == "220.00"
+    assert j["shop_expenses_excl_savings"] == "220.00" and j["shop_expenses"] == "320.00"
+    assert [x["amount"] for x in j["expenses"]] == ["220.00"]
     rows = audit_rows(admin, r["id"])
     assert [x[0] for x in rows] == ["INSERT", "UPDATE"]
     action, actor, reason, old, new = rows[1]
@@ -244,7 +268,13 @@ def test_edit_validation_future_date_reason_and_rules(client, key, owner, bid) -
     no_reason = edit_body(d, bid["NDL"])
     del no_reason["reason"]
     assert client.put(url, json=no_reason, headers=h(key, owner)).status_code == 422
-    for over in ({"total_sales": "0"}, {"shop_savings": "999.00"}, {"cash_received": "-1"}):
+    bad_lines = [L("Food", "x", "5", status="Unpaid", account=None)]  # unpaid needs a supplier
+    for over in (
+        {"total_sales": "0"},
+        {"shop_expenses": "300.00"},  # the old total is no longer accepted: it is computed
+        {"cash_received": "-1"},
+        {"expenses": bad_lines},
+    ):
         assert (
             client.put(
                 url, json=edit_body(d, bid["NDL"], **over), headers=h(key, owner)
@@ -284,7 +314,7 @@ def test_branch_user_cannot_edit_delete_or_read_history(
         admin.execute("set role app_api")
         try:
             admin.execute(
-                "select public.edit_daily_report(%s,%s,%s,1,1,1,0,0,0,0,0,'[]',%s)",
+                "select public.edit_daily_report(%s,%s,%s,1,1,1,0,0,0,0,'[]'::jsonb,%s)",
                 (r["id"], d, bid["ALSAFA MAIN"], "no way"),
             )
         finally:
@@ -306,7 +336,9 @@ def test_edit_database_function_requires_owner_claims(admin, bid, app_api_url, m
     s = next(gen)
     with pytest.raises(Exception, match="owner only"):
         s.execute(
-            text("select public.edit_daily_report(:i,:d,:b,600,1,600,0,0,0,0,0,'[]',:r)"),
+            text(
+                "select public.edit_daily_report(:i,:d,:b,600,1,600,0,0,0,0,cast('[]' as jsonb),:r)"
+            ),
             {"i": r, "d": date(2025, 12, 10), "b": bid["ALSAFA MAIN"], "r": "attempt"},
         )
     s.rollback()
@@ -341,42 +373,37 @@ def test_branch_report_owner_edit_of_voided_is_404(client, key, owner, bid) -> N
     )
 
 
-# ===================================================== 4/5. Other expenses =========================================
-def test_other_expenses_are_part_of_the_shop_total_and_never_double_counted(
+# ===================================================== 4/5. Itemised shop expenses =================================
+def test_itemised_expenses_plus_savings_are_the_shop_total_and_never_double_counted(
     client, key, owner, bid, admin
 ) -> None:
     d = date(2025, 12, 12)
-    other = [
-        {"description": "Gas cylinder", "amount": "45.50", "notes": "Cash purchase"},
-        {"description": "Courier", "amount": "20.00"},
+    lines = [
+        L("Repairs & Maintenance", "Gas cylinder", "45.50", remarks="Cash purchase"),
+        L("Stationery", "Courier", "20.00", account="ENBD"),
     ]
-    r = submit(
-        client,
-        key,
-        owner,
-        d,
-        bid["JERNAS"],
-        shop_expenses="300.00",
-        shop_savings="100.00",
-        other_expenses=other,
-    )
-    assert r["shop_expenses"] == "300.00" and r["other_expenses_total"] == "65.50"
-    assert r["shop_expenses_excl_savings"] == "200.00"  # 300 - 100: Other is NOT added again
-    assert [i["description"] for i in r["other_expenses"]] == ["Gas cylinder", "Courier"]
+    r = submit(client, key, owner, d, bid["JERNAS"], expenses=lines, shop_savings="100.00")
+    assert r["shop_expenses"] == "165.50"  # 65.50 itemised + 100 savings
+    assert r["shop_expenses_excl_savings"] == "65.50"  # savings are NOT an expense
+    assert r["expenses_paid"] == "65.50" and r["expenses_outstanding"] == "0.00"
+    assert r["cash_paid_expenses"] == "45.50" and r["bank_paid_expenses"] == "20.00"
+    assert r["net_cash"] == "454.50"  # 600 cash received - 45.50 paid in cash - 100 savings
+    assert [i["description"] for i in r["expenses"]] == ["Gas cylinder", "Courier"]
     dash = client.get(
         f"{API}/dashboard/owner",
         params={"mode": "day", "date": d.isoformat()},
         headers=h(key, owner),
     ).json()
-    assert dash["kpis"]["shop_expenses_excl_savings"] == "200.00"
+    assert dash["kpis"]["shop_expenses_excl_savings"] == "65.50"
+    assert dash["kpis"]["total_shop_expenses"] == "165.50"
     assert dash["kpis"]["total_savings"] == "100.00"
-    # the tab lists the items; summing them does not feed any other total
+    assert dash["kpis"]["shop_expenses_paid"] == "65.50"
     tab = client.get(
-        f"{API}/expenses/other",
+        f"{API}/expenses/shop",
         params={"date_from": d.isoformat(), "date_to": d.isoformat()},
         headers=h(key, owner),
     ).json()
-    assert tab["total"] == 2 and tab["total_amount"] == "65.50"
+    assert tab["total"] == 2 and tab["totals"]["total"] == "65.50"
     first = tab["items"][0]
     assert (
         first["branch_name"] == "JERNAS"
@@ -394,30 +421,47 @@ def test_other_expenses_are_part_of_the_shop_total_and_never_double_counted(
 @pytest.mark.parametrize(
     "items",
     [
-        [{"description": "  ", "amount": "5"}],
-        [{"description": "x", "amount": "0"}],
-        [{"description": "x", "amount": "-3"}],
-        [{"description": "x", "amount": "1.234"}],
-        [{"description": "x", "amount": "301.00"}],  # more than shop_expenses (300)
-        [{"description": "a", "amount": "200"}, {"description": "b", "amount": "101"}],
-        [{"description": "x", "amount": "5", "category": "hack"}],
-        [{"description": "d" * 201, "amount": "5"}],
+        [L("Food", "  ", "5")],
+        [L("Food", "x", "0")],
+        [L("Food", "x", "-3")],
+        [L("Food", "x", "1.234")],
+        [L("Savings", "x", "5")],  # savings is not a category
+        [L("Other (Legacy)", "x", "5")],  # legacy category is never accepted as input
+        [L("Food", "x", "5", account=None)],  # paid needs an account
+        [L("Food", "x", "5", amount_paid="4")],  # paid must be paid in full
+        [L("Food", "x", "5", status="Unpaid", account=None)],  # credit needs a supplier
+        [
+            L(
+                "Food",
+                "x",
+                "5",
+                status="Unpaid",
+                account=None,
+                amount_paid="1",
+                supplier_id=str(uuid.uuid4()),
+            )
+        ],
+        [L("Food", "x", "5", status="Partial", amount_paid="5", supplier_id=str(uuid.uuid4()))],
+        [L("Food", "x", "5", status="Partial", amount_paid="0", supplier_id=str(uuid.uuid4()))],
+        [L("Food", "x", "5", payment_account="Bitcoin")],
+        [L("Food", "d" * 201, "5")],
+        [{**L("Food", "x", "5"), "surprise": 1}],
     ],
 )
-def test_other_expense_items_are_validated(client, key, owner, bid, items) -> None:
+def test_expense_rows_are_validated(client, key, owner, bid, items) -> None:
     r = client.post(
         f"{API}/daily-reports",
-        json=payload(date(2025, 12, 13), bid["AL BARSHA"], other_expenses=items),
+        json=payload(date(2025, 12, 13), bid["AL BARSHA"], expenses=items),
         headers=h(key, owner),
     )
     assert r.status_code == 422, r.text
 
 
-def test_database_trigger_also_rejects_bad_other_items(admin, bid) -> None:
+def test_database_freezes_the_legacy_other_expenses_column(admin, bid) -> None:
     with pytest.raises(psycopg.errors.CheckViolation):
         admin.execute(
-            "insert into public.daily_reports (report_date, branch_id, total_sales, shop_expenses, other_expenses)"
-            " values (%s,%s,100,10,%s::jsonb)",
+            "insert into public.daily_reports (report_date, branch_id, total_sales, other_expenses)"
+            " values (%s,%s,100,%s::jsonb)",
             (
                 date(2025, 12, 14),
                 bid["AL BARSHA"],
@@ -426,36 +470,37 @@ def test_database_trigger_also_rejects_bad_other_items(admin, bid) -> None:
         )
 
 
-def test_owner_edit_replaces_other_items_and_history_shows_them(client, key, owner, bid) -> None:
+def test_owner_edit_replaces_expense_rows_and_keeps_history(client, key, owner, bid, admin) -> None:
     d = date(2025, 12, 15)
-    r = submit(
-        client,
-        key,
-        owner,
-        d,
-        bid["AL JADDAF"],
-        other_expenses=[{"description": "Tape", "amount": "10.00"}],
-    )
+    r = submit(client, key, owner, d, bid["AL JADDAF"], expenses=[L("Stationery", "Tape", "10.00")])
     e = client.put(
         f"{API}/daily-reports/{r['id']}",
         json=edit_body(
             d,
             bid["AL JADDAF"],
-            other_expenses=[
-                {"description": "Tape", "amount": "12.00", "notes": "x2"},
-                {"description": "Ink", "amount": "8.00"},
+            expenses=[
+                L("Stationery", "Tape", "12.00", remarks="x2"),
+                L("Stationery", "Ink", "8.00"),
             ],
         ),
         headers=h(key, owner),
     ).json()
-    assert e["other_expenses_total"] == "20.00" and len(e["other_expenses"]) == 2
+    assert e["shop_expenses_excl_savings"] == "20.00" and len(e["expenses"]) == 2
     hist = client.get(f"{API}/daily-reports/{r['id']}/history", headers=h(key, owner)).json()
-    change = next(c for c in hist[0]["changes"] if c["field"] == "Other expenses")
-    assert "Tape 10.00" in change["old"] and "Ink 8.00" in change["new"]
+    change = next(c for c in hist[0]["changes"] if c["field"] == "Shop expenses")
+    assert change["old"] == "110.00" and change["new"] == "120.00"
+    # the replaced row is kept as history (voided with the reason), never overwritten
+    old = admin.execute(
+        "select amount, voided_at is not null, void_reason from public.daily_report_expenses"
+        " where report_id=%s order by created_at, line_no",
+        (r["id"],),
+    ).fetchall()
+    assert [(float(a), v) for a, v, _ in old] == [(10.0, True), (12.0, False), (8.0, False)]
+    assert old[0][2].startswith("Daily report corrected")
 
 
-# ===================================================== 5. Other Expenses tab =======================================
-def test_other_expenses_tab_filters_search_and_permissions(
+# ===================================================== 5. Shop Expenses tab ========================================
+def test_shop_expenses_tab_filters_search_and_permissions(
     client, key, owner, main_user, bid
 ) -> None:
     d = date(2025, 12, 16)
@@ -464,66 +509,62 @@ def test_other_expenses_tab_filters_search_and_permissions(
         key,
         main_user,
         d,
-        other_expenses=[{"description": "Zebra rope", "amount": "7.00", "notes": "storage"}],
+        expenses=[L("Raw Material", "Zebra rope", "7.00", remarks="storage")],
     )
-    submit(
-        client,
-        key,
-        owner,
-        d,
-        bid["SATWA"],
-        other_expenses=[{"description": "Lamp", "amount": "9.00"}],
-    )
+    submit(client, key, owner, d, bid["SATWA"], expenses=[L("Petrol", "Lamp", "9.00")])
     p = {"date_from": d.isoformat(), "date_to": d.isoformat()}
-    allr = client.get(f"{API}/expenses/other", params=p, headers=h(key, owner)).json()
-    assert allr["total"] == 2 and allr["total_amount"] == "16.00"
+    allr = client.get(f"{API}/expenses/shop", params=p, headers=h(key, owner)).json()
+    assert allr["total"] == 2 and allr["totals"]["total"] == "16.00"
     by_branch = client.get(
-        f"{API}/expenses/other", params={**p, "branch_id": str(bid["SATWA"])}, headers=h(key, owner)
+        f"{API}/expenses/shop", params={**p, "branch_id": str(bid["SATWA"])}, headers=h(key, owner)
     ).json()
     assert [i["description"] for i in by_branch["items"]] == ["Lamp"]
+    by_cat = client.get(
+        f"{API}/expenses/shop", params={**p, "category": "Raw Material"}, headers=h(key, owner)
+    ).json()
+    assert [i["description"] for i in by_cat["items"]] == ["Zebra rope"]
     srch = client.get(
-        f"{API}/expenses/other", params={**p, "q": "ZEBRA"}, headers=h(key, owner)
+        f"{API}/expenses/shop", params={**p, "q": "ZEBRA"}, headers=h(key, owner)
     ).json()
     assert [i["description"] for i in srch["items"]] == ["Zebra rope"] and srch["items"][0][
-        "notes"
+        "remarks"
     ] == "storage"
     assert (
         client.get(
-            f"{API}/expenses/other", params={**p, "q": "storage"}, headers=h(key, owner)
+            f"{API}/expenses/shop", params={**p, "q": "storage"}, headers=h(key, owner)
         ).json()["total"]
         == 1
     )
     assert (
         client.get(
-            f"{API}/expenses/other",
+            f"{API}/expenses/shop",
             params={"date_from": "2025-12-20", "date_to": "2025-12-01"},
             headers=h(key, owner),
         ).status_code
         == 422
     )
     assert (
-        client.get(f"{API}/expenses/other", params=p, headers=h(key, main_user)).status_code == 403
+        client.get(
+            f"{API}/expenses/shop", params={**p, "category": "Gym"}, headers=h(key, owner)
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(f"{API}/expenses/shop", params=p, headers=h(key, main_user)).status_code == 403
     )
 
 
-def test_voided_report_items_leave_the_other_expenses_tab(client, key, owner, bid) -> None:
+def test_voided_report_items_leave_the_shop_expenses_tab(client, key, owner, bid) -> None:
     d = date(2025, 12, 17)
-    r = submit(
-        client,
-        key,
-        owner,
-        d,
-        bid["KARAMA"],
-        other_expenses=[{"description": "Gone soon", "amount": "3.00"}],
-    )
+    r = submit(client, key, owner, d, bid["KARAMA"], expenses=[L("Other", "Gone soon", "3.00")])
     p = {"date_from": d.isoformat(), "date_to": d.isoformat()}
-    assert client.get(f"{API}/expenses/other", params=p, headers=h(key, owner)).json()["total"] == 1
+    assert client.get(f"{API}/expenses/shop", params=p, headers=h(key, owner)).json()["total"] == 1
     client.post(
         f"{API}/daily-reports/{r['id']}/void",
         json={"reason": "duplicate entry"},
         headers=h(key, owner),
     )
-    assert client.get(f"{API}/expenses/other", params=p, headers=h(key, owner)).json()["total"] == 0
+    assert client.get(f"{API}/expenses/shop", params=p, headers=h(key, owner)).json()["total"] == 0
 
 
 # ===================================================== 3. PDF export ================================================
@@ -544,7 +585,7 @@ def test_owner_pdf_all_branches_individual_and_consolidated(
         owner,
         d,
         bid["SATWA"],
-        other_expenses=[{"description": "Gas", "amount": "5.00"}],
+        expenses=[L("Repairs & Maintenance", "Gas", "5.00")],
     )
     for layout in ("individual", "consolidated"):
         r = client.get(
@@ -607,7 +648,7 @@ def test_pdf_contains_the_required_fields_and_only_permitted_data(
         d,
         total_sales="1234.50",
         cash_received="1000.00",
-        other_expenses=[{"description": "Zip ties", "amount": "4.00", "notes": "box"}],
+        expenses=[L("Stationery", "Zip ties", "4.00", remarks="box")],
     )
     submit(client, key, jernas_user, d, total_sales="9876.50", cash_received="9000.00")
     mine = _pdf_text(

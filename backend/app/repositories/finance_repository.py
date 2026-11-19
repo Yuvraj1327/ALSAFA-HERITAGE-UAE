@@ -278,39 +278,6 @@ class FinanceRepository(BaseRepository):
         assert agg is not None
         return rows, agg
 
-    _OTHER_FROM = """from public.daily_reports r
-         cross join lateral jsonb_array_elements(r.other_expenses) with ordinality as e(item, n)
-         join public.branches b on b.id = r.branch_id
-         left join public.profiles p on p.user_id = r.created_by
-        where r.voided_at is null
-          and (cast(:d_from as date) is null or r.report_date >= cast(:d_from as date))
-          and (cast(:d_to as date) is null or r.report_date <= cast(:d_to as date))
-          and (cast(:branch as uuid) is null or r.branch_id = cast(:branch as uuid))
-          and (cast(:q as text) is null
-               or (e.item ->> 'description') ilike '%' || cast(:q as text) || '%'
-               or coalesce(e.item ->> 'notes', '') ilike '%' || cast(:q as text) || '%')"""
-
-    def other_expenses_page(
-        self, f: dict[str, Any], limit: int, offset: int
-    ) -> tuple[list[Row], Row]:
-        """Itemised "Other" shop expenses. They are a breakdown of daily_reports.shop_expenses, so this only READS
-        them: nothing is stored twice and no total anywhere adds them on top of shop_expenses."""
-        rows = self._all(
-            """select r.id as report_id, e.n, r.report_date as expense_date, r.branch_id, b.name as branch_name,
-                      e.item ->> 'description' as description, (e.item ->> 'amount')::numeric as amount,
-                      e.item ->> 'notes' as notes, p.full_name as recorded_by, r.created_at as recorded_at """
-            + self._OTHER_FROM
-            + " order by r.report_date desc, b.sort_order, r.created_at desc, e.n limit :lim offset :off",
-            {**f, "lim": limit, "off": offset},
-        )
-        agg = self._one(
-            "select count(*) as n, coalesce(sum((e.item ->> 'amount')::numeric), 0) as total "
-            + self._OTHER_FROM,
-            f,
-        )
-        assert agg is not None
-        return rows, agg
-
     def set_saving(self, id_: uuid.UUID, is_saving: bool) -> int:
         return self.session.execute(
             text(
@@ -400,8 +367,10 @@ class FinanceRepository(BaseRepository):
 
     _ENT_SELECT = """select e.id, e.supplier_id, s.name as supplier_name, e.entry_date, e.kind, e.amount, e.paid_from,
                             b.name as branch_name, e.reference, e.note, (e.voided_at is not null) as voided, e.void_reason,
-                            e.created_at, p.full_name as created_by_name
+                            e.created_at, p.full_name as created_by_name,
+                            e.source_expense_id, dre.report_id as source_report_id, dre.category as source_category
                        from public.supplier_entries e join public.suppliers s on s.id = e.supplier_id
+                       left join public.daily_report_expenses dre on dre.id = e.source_expense_id
                        left join public.branches b on b.id = e.branch_id
                        left join public.profiles p on p.user_id = e.created_by"""
 

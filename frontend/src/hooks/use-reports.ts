@@ -11,6 +11,7 @@ import {
   editDailyReport,
   getReportHistory,
   listDailyReports,
+  listSupplierOptions,
   voidDailyReport,
   type PdfParams,
   type ReportEditPayload,
@@ -30,6 +31,15 @@ export function useDailyReports(filters: ReportFilters) {
     queryFn: () => listDailyReports(filters),
     placeholderData: keepPreviousData,
     meta: { silent: true }, // the table shows its own error state with a retry button
+  })
+}
+
+export function useSupplierOptions() {
+  return useQuery({
+    queryKey: ['daily-reports', 'supplier-options'],
+    queryFn: listSupplierOptions,
+    staleTime: 60_000,
+    meta: { silent: true }, // the expense rows still work without suppliers (paid expenses); a hint is shown
   })
 }
 
@@ -60,6 +70,9 @@ function useInvalidateReporting() {
       qc.invalidateQueries({ queryKey: ['dashboard'] }),
       qc.invalidateQueries({ queryKey: ['branch-date-view'] }),
       qc.invalidateQueries({ queryKey: ['expenses'] }),
+      // supplier dues/payments and every balance are generated from the report's expense rows
+      qc.invalidateQueries({ queryKey: ['suppliers'] }),
+      qc.invalidateQueries({ queryKey: ['cash-banks'] }),
     ])
 }
 
@@ -90,7 +103,7 @@ export function useEditDailyReport() {
       await Promise.all([
         invalidate(),
         qc.invalidateQueries({ queryKey: ['report-history'] }),
-        qc.invalidateQueries({ queryKey: ['expenses'] }), // the Other Expenses tab reads the same reports
+        qc.invalidateQueries({ queryKey: ['expenses'] }), // the Shop Expenses tab reads the same reports
       ])
     },
   })

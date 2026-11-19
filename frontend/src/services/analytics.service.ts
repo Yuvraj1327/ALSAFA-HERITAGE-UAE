@@ -15,6 +15,9 @@ export interface ReportFilters {
   branch_id?: string
   supplier_id?: string
   account?: string
+  /** Shop expense reports: one of the six categories (or Other (Legacy)) and Paid / Unpaid / Partial. */
+  category?: string
+  status?: string
   kind?: string
   module?: string
   action?: string

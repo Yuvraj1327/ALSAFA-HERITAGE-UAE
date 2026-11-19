@@ -35,3 +35,17 @@ Function execution: authenticated only (anon and PUBLIC revoked). `app_balances`
 - `service_role` and the database owner bypass RLS by design; protect those credentials.
 - Super-user-level DDL (disabling triggers) is outside what SQL policies can prevent; rely on access control and backups.
 - Per-branch visibility of cash/tasks (D10, D11) is deliberately closed pending decisions.
+
+
+## 0021 additions
+| Object | Owner | Branch User |
+|---|---|---|
+| daily_report_expenses | SELECT all | SELECT own branch only (`branch_id = app.branch_id()`) |
+| daily_report_expenses INSERT/UPDATE/DELETE | none (no grant) | none (no grant) |
+| submit_daily_report() | any active branch | own branch only (checked in the function against `app.branch_id()`) |
+| edit_daily_report(), void_daily_report() | yes (owner check inside) | refused (42501) |
+| report_supplier_options() | id + name of active suppliers | id + name of active suppliers |
+| suppliers, supplier_entries | unchanged (owner only) | unchanged (no access) |
+
+All new SECURITY DEFINER functions pin `search_path = public, pg_temp`, derive identity from `auth.uid()` and revoke EXECUTE from `public/anon`.
+Rows created by these functions are written by the table owner (RLS bypass is limited to those audited code paths; `authenticated` can never write the table directly).

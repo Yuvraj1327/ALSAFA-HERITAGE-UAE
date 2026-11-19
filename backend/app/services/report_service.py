@@ -17,8 +17,10 @@ from app.schemas.reports import (
     DailyReportEdit,
     DailyReportOut,
     DailyReportPage,
-    OtherExpenseOut,
+    ExpenseLineOut,
     ReportHistoryEntry,
+    SupplierOption,
+    expenses_payload,
 )
 from app.services import report_pdf_service as pdf
 from app.services.base import BaseService
@@ -44,7 +46,7 @@ def _text(v: Any) -> str | None:
         v, float
     ):  # audit_log jsonb numerics: 600.0 -> "600.00" (money has exactly two places)
         return f"{Decimal(str(v)):.2f}"
-    if isinstance(v, list):  # other_expenses: "Detergent 12.00; Gas 5.00"
+    if isinstance(v, list):  # legacy other_expenses: "Detergent 12.00; Gas 5.00"
         return "; ".join(f"{i.get('description')} {i.get('amount')}" for i in v) or None
     return str(v)
 
@@ -71,12 +73,36 @@ def history_entry(r: dict[str, Any]) -> ReportHistoryEntry:
     )
 
 
+def money_sum(values: Any) -> Decimal:
+    return calc.money(sum(values, Decimal(0)))
+
+
+def expense_line_out(x: dict[str, Any]) -> ExpenseLineOut:
+    return ExpenseLineOut(
+        id=x["id"],
+        line_no=x["line_no"],
+        category=x["category"],
+        description=x["description"],
+        amount=x["amount"],
+        remarks=x["remarks"],
+        supplier_id=x["supplier_id"],
+        supplier_name=x["supplier_name"],
+        payment_status=x["payment_status"],
+        payment_account=x["payment_account"],
+        amount_paid=x["amount_paid"],
+        outstanding=calc.expense_outstanding(x["amount"], x["amount_paid"]),
+        is_legacy=x["is_legacy"],
+    )
+
+
 def report_out(row: dict[str, Any]) -> DailyReportOut:
     """Row -> API model, adding every computed field through app.core.calculations (the only place they exist)."""
     received = calc.total_received(
         row["cash_received"], row["pos_amount"], row["bank_transfer"], row["link_payment"]
     )
     diff = calc.difference(row["total_sales"], received)
+    lines = [expense_line_out(x) for x in row.get("expenses") or []]
+    cash_paid = money_sum(x.amount_paid for x in lines if x.payment_account == "Cash")
     return DailyReportOut(
         **{
             k: row[k]
@@ -98,13 +124,12 @@ def report_out(row: dict[str, Any]) -> DailyReportOut:
                 "updated_at",
             )
         },
-        other_expenses=[
-            OtherExpenseOut(description=i["description"], amount=i["amount"], notes=i.get("notes"))
-            for i in (row.get("other_expenses") or [])
-        ],
-        other_expenses_total=calc.money(
-            sum((Decimal(str(i["amount"])) for i in (row.get("other_expenses") or [])), Decimal(0))
-        ),
+        expenses=lines,
+        expenses_paid=money_sum(x.amount_paid for x in lines),
+        expenses_outstanding=money_sum(x.outstanding for x in lines),
+        cash_paid_expenses=cash_paid,
+        bank_paid_expenses=money_sum(x.amount_paid for x in lines if x.payment_account != "Cash"),
+        net_cash=calc.net_cash(row["cash_received"], cash_paid, row["shop_savings"]),
         total_received=received,
         difference=diff,
         check=calc.check_label(diff),
@@ -140,7 +165,9 @@ class ReportService(BaseService):
                 },
             )
         try:
-            new_id = self.repo.insert(branch_id, report_date, body.model_dump(mode="python"))
+            values = body.model_dump(mode="python", exclude={"expenses"})
+            values["expenses"] = expenses_payload(body.expenses)
+            new_id = self.repo.insert(branch_id, report_date, values)
             self.session.commit()
         except IntegrityError as exc:
             self.session.rollback()
@@ -188,10 +215,17 @@ class ReportService(BaseService):
             )
         if state == _CHECK:
             message = str(exc.orig).splitlines()[0] if exc.orig else "Report breaks a business rule"
-            if "other_expenses" in message:
+            diag = getattr(exc.orig, "diag", None)
+            primary = str(getattr(diag, "message_primary", "") or "")
+            if primary.startswith("expense line"):
+                # raised by app.parse_report_expenses, e.g. "expense line 2: amount must be greater than zero"
                 return UnprocessableError(
-                    "Check the Other expenses",
-                    fields={"other_expenses": [message.split("other_expenses", 1)[1].lstrip(": ")]},
+                    primary[0].upper() + primary[1:], fields={"expenses": [primary]}
+                )
+            if "supplier" in primary and "negative" in primary:
+                return UnprocessableError(
+                    "This change would leave a supplier with a negative balance",
+                    code="negative_balance",
                 )
             if "future" in message:
                 return UnprocessableError(
@@ -230,6 +264,9 @@ class ReportService(BaseService):
             raise NotFoundError("Report not found")
         scope.ensure(row["branch_id"])
         return report_out(row)
+
+    def supplier_options(self) -> builtins.list[SupplierOption]:
+        return [SupplierOption(**r) for r in self.repo.supplier_options()]
 
     # ---- PDF export --------------------------------------------------------------------------------------
     def export_pdf(
@@ -303,7 +340,9 @@ class ReportService(BaseService):
                     "Unknown or inactive branch", fields={"branch_id": ["Select an active branch"]}
                 )
         try:
-            self.repo.edit(report_id, body.model_dump(mode="python"), body.reason)
+            values = body.model_dump(mode="python", exclude={"expenses", "reason"})
+            values["expenses"] = expenses_payload(body.expenses)
+            self.repo.edit(report_id, values, body.reason)
             self.session.commit()
         except DBAPIError as exc:
             self.session.rollback()

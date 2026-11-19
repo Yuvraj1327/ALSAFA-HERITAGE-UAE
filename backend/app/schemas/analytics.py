@@ -31,6 +31,8 @@ class AppliedFilters(BaseModel):
     branch_name: str
     supplier_id: uuid.UUID | None = None
     account: str | None = None
+    category: str | None = None
+    status: str | None = None
 
 
 class ReportOut(BaseModel):
@@ -67,6 +69,14 @@ class OverviewKpis(BaseModel):
     not_yet_received: Any
     balance_status: str
     balance_date: date | None
+    total_shop_expenses: Any = 0
+    shop_expenses_paid: Any = 0
+    shop_expenses_unpaid: Any = 0
+    shop_partial_payments: Any = 0
+    shop_expenses_outstanding: Any = 0
+    net_cash_period: Any = 0
+    net_cash_in_hand: Any | None = None
+    supplier_outstanding: Any = 0
 
 
 class Overview(BaseModel):

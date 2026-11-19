@@ -20,9 +20,10 @@ import { FormField } from '@/components/common/form-field'
 import { useEditDailyReport, useReportHistory } from '@/hooks/use-reports'
 import { toApiError } from '@/lib/errors'
 import {
-  fromFils,
+  EXPENSE_CATEGORIES,
   reportFormSchema,
   shopExpensesTotal,
+  toExpensePayload,
   toFils,
   type DailyReport,
   type ReportFormInput,
@@ -30,6 +31,10 @@ import {
 } from '@/schemas/reports'
 import { dubaiToday, formatAED, formatDate, formatDateTime } from '@/utils/format'
 import { ReportAmountFields } from './ReportFields'
+
+/** Historical lines carry "Other (Legacy)", which is not a selectable category: they open as "Other". */
+const editableCategory = (c: string) =>
+  (EXPENSE_CATEGORIES as readonly string[]).includes(c) ? c : 'Other'
 
 function initial(r: DailyReport): ReportFormInput {
   return {
@@ -41,13 +46,16 @@ function initial(r: DailyReport): ReportFormInput {
     pos_amount: r.pos_amount,
     bank_transfer: r.bank_transfer,
     link_payment: r.link_payment,
-    // The form edits the regular part; Other items are added back on save.
-    shop_expenses: fromFils(toFils(r.shop_expenses) - toFils(r.other_expenses_total)),
     shop_savings: r.shop_savings,
-    other_expenses: r.other_expenses.map((i) => ({
-      description: i.description,
-      amount: i.amount,
-      notes: i.notes ?? '',
+    expenses: r.expenses.map((x) => ({
+      category: editableCategory(x.category),
+      description: x.description,
+      amount: x.amount,
+      remarks: x.remarks ?? '',
+      supplier_id: x.supplier_id ?? '',
+      payment_status: x.payment_status,
+      payment_account: x.payment_account ?? '',
+      amount_paid: x.payment_status === 'Partial' ? x.amount_paid : '',
     })),
     reason: '',
   }
@@ -57,7 +65,7 @@ function initial(r: DailyReport): ReportFormInput {
 function diff(r: DailyReport, v: ReportFormValues, branchName: (id: string) => string) {
   const money = (a: string, b: string) =>
     toFils(a) === toFils(b) ? null : [formatAED(a), formatAED(b)]
-  const total = shopExpensesTotal(v.shop_expenses, v.other_expenses)
+  const total = shopExpensesTotal(v.expenses, v.shop_savings)
   const rows: [string, string[] | null][] = [
     [
       'Date',
@@ -75,8 +83,13 @@ function diff(r: DailyReport, v: ReportFormValues, branchName: (id: string) => s
     ['POS', money(r.pos_amount, v.pos_amount)],
     ['Bank transfers', money(r.bank_transfer, v.bank_transfer)],
     ['Payment links', money(r.link_payment, v.link_payment)],
-    ['Shop expenses (incl. Other)', money(r.shop_expenses, total)],
-    ['Other expenses', money(r.other_expenses_total, shopExpensesTotal('0', v.other_expenses))],
+    ['Shop expenses (itemised + savings)', money(r.shop_expenses, total)],
+    [
+      'Expense rows',
+      r.expenses.length === v.expenses.length
+        ? null
+        : [String(r.expenses.length), String(v.expenses.length)],
+    ],
     ['Savings', money(r.shop_savings, v.shop_savings)],
   ]
   return rows.filter((x): x is [string, string[]] => x[1] !== null)
@@ -114,13 +127,8 @@ function EditForm({ report, onDone }: { report: DailyReport; onDone: () => void 
           pos_amount: v.pos_amount,
           bank_transfer: v.bank_transfer,
           link_payment: v.link_payment,
-          shop_expenses: shopExpensesTotal(v.shop_expenses, v.other_expenses),
           shop_savings: v.shop_savings,
-          other_expenses: v.other_expenses.map((i) => ({
-            description: i.description,
-            amount: i.amount,
-            ...(i.notes ? { notes: i.notes } : {}),
-          })),
+          expenses: toExpensePayload(v.expenses),
           reason: v.reason ?? '',
         },
       })
@@ -197,6 +205,16 @@ function EditForm({ report, onDone }: { report: DailyReport; onDone: () => void 
           {...form.register('order_count')}
         />
       </div>
+      {report.expenses.some((x) => x.is_legacy) ? (
+        <p
+          role="note"
+          className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs"
+        >
+          This report has historical expense entries (Other (Legacy)). They open here as{' '}
+          <strong>Other</strong>; choose a category, or leave them as they are. Saving records the
+          new category in the audit history.
+        </p>
+      ) : null}
       <ReportAmountFields form={form as never} />
       <FormField label="Reason for change (required)" error={errors.reason}>
         <Textarea maxLength={500} {...form.register('reason')} />
@@ -250,7 +268,8 @@ function EditForm({ report, onDone }: { report: DailyReport; onDone: () => void 
             <div className="space-y-2 text-left text-sm">
               <p>
                 The original values are kept in the audit history with your name, the time and your
-                reason. Collections and reconciliation are recalculated.
+                reason. Collections, reconciliation, expense rows, supplier dues and payments, and
+                the Cash / ENBD / ADCB balances are recalculated together.
               </p>
               {changes.length === 0 ? (
                 <p>No figures changed.</p>

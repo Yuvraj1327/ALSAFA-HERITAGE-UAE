@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
@@ -31,6 +32,14 @@ class Totals(BaseModel):
     shop_expenses: Money
     shop_savings: Money
     shop_expenses_excl_savings: Money
+    # Payment-based view of the itemised expenses (all derived by app.core.calculations)
+    shop_paid: Money = Decimal(0)  # SUM(amount paid)
+    shop_unpaid: Money = Decimal(0)  # amount of lines with status Unpaid
+    shop_partial_paid: Money = Decimal(0)  # part paid on Partial lines
+    shop_outstanding: Money = Decimal(0)  # unpaid + partial remainders
+    cash_paid_expenses: Money = Decimal(0)
+    bank_paid_expenses: Money = Decimal(0)
+    net_cash: Money = Decimal(0)  # cash received - cash paid expenses - savings
 
 
 class MissingBranch(BaseModel):
@@ -97,6 +106,20 @@ class Kpis(BaseModel):
     sales_minus_expenses: Money
     total_orders: int
     cash_bank_balance: Money | None  # None when balances are not configured / before the start date
+    total_shop_expenses: Money = Decimal(
+        0
+    )  # itemised expenses + savings (as stored on the reports)
+    shop_expenses_paid: Money = Decimal(0)
+    shop_expenses_unpaid: Money = Decimal(0)
+    shop_partial_payments: Money = Decimal(0)
+    shop_expenses_outstanding: Money = Decimal(0)
+    net_cash_period: Money = Decimal(
+        0
+    )  # cash received - cash expenses actually paid - savings, in the period
+    net_cash_in_hand: Money | None = None  # Cash in Hand at the end of the period (ledger)
+    supplier_outstanding: Money = Decimal(
+        0
+    )  # owed to all suppliers now: opening + valid dues - valid payments
 
 
 class BalanceSummary(BaseModel):

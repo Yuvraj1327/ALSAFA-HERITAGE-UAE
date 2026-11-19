@@ -16,6 +16,7 @@ import { FormSelect } from '@/components/forms/form-select'
 import { PageContainer } from '@/components/layout/page-container'
 import { Button } from '@/components/ui/button'
 import { useCatalog, useOverview, useReport } from '@/hooks/use-analytics'
+import { EXPENSE_CATEGORIES, PAYMENT_STATUSES } from '@/schemas/reports'
 import type { ReportFilters } from '@/services/analytics.service'
 import { formatAED, dubaiToday } from '@/utils/format'
 import { ChartsSection } from './ChartsSection'
@@ -43,6 +44,8 @@ export function ReportsPage() {
   const [sort, setSort] = useState<string | undefined>()
   const [desc, setDesc] = useState(false)
   const [page, setPage] = useState(1)
+  const [shopCategory, setShopCategory] = useState('all')
+  const [shopStatus, setShopStatus] = useState('all')
 
   const catalog = useCatalog()
   const items = useMemo(
@@ -61,8 +64,15 @@ export function ReportsPage() {
     ...(filter.branch !== 'all' ? { branch_id: filter.branch } : {}),
   }
   const valid = Boolean(filter.from && filter.to && filter.from <= filter.to)
+  const isShopReport = activeKey.startsWith('shop_expense')
+  // Category / payment status only apply to the itemised shop expense reports.
+  const reportFilters: ReportFilters = {
+    ...filters,
+    ...(isShopReport && shopCategory !== 'all' ? { category: shopCategory } : {}),
+    ...(isShopReport && shopStatus !== 'all' ? { status: shopStatus } : {}),
+  }
   const overview = useOverview(filters)
-  const report = useReport(activeKey, { ...filters, page, page_size: PAGE_SIZE, sort, desc })
+  const report = useReport(activeKey, { ...reportFilters, page, page_size: PAGE_SIZE, sort, desc })
   const k = overview.data?.kpis
   const money = (v: string | number | null | undefined) =>
     v === null || v === undefined ? undefined : formatAED(String(v))
@@ -141,6 +151,33 @@ export function ReportsPage() {
           value={k ? (money(k.cash_bank_balance) ?? 'Not configured') : undefined}
           description={k?.balance_date ? `At ${k.balance_date}` : undefined}
         />
+        <StatCard
+          label="Paid Shop Expenses"
+          icon={Receipt}
+          isLoading={overview.isLoading}
+          value={money(k?.shop_expenses_paid)}
+          description={k ? `Unpaid ${money(k.shop_expenses_unpaid)}` : undefined}
+        />
+        <StatCard
+          label="Shop Expenses Outstanding"
+          icon={Receipt}
+          isLoading={overview.isLoading}
+          value={money(k?.shop_expenses_outstanding)}
+          description={k ? `Partial payments ${money(k.shop_partial_payments)}` : undefined}
+        />
+        <StatCard
+          label="Supplier Outstanding"
+          icon={Banknote}
+          isLoading={overview.isLoading}
+          value={money(k?.supplier_outstanding)}
+        />
+        <StatCard
+          label="Net Cash in Hand"
+          icon={Wallet}
+          isLoading={overview.isLoading}
+          value={k ? (money(k.net_cash_in_hand) ?? 'Not configured') : undefined}
+          description={k ? `Net cash in period ${money(k.net_cash_period)}` : undefined}
+        />
       </div>
       {overview.data?.notes.length ? (
         <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
@@ -183,7 +220,7 @@ export function ReportsPage() {
             activeKey ? (
               <ExportButtons
                 reportKey={activeKey}
-                filters={{ ...filters, ...(sort ? { sort, desc } : {}) }}
+                filters={{ ...reportFilters, ...(sort ? { sort, desc } : {}) }}
               />
             ) : null
           }
@@ -219,6 +256,37 @@ export function ReportsPage() {
                   setPage(1)
                 }}
               />
+            ) : null}
+            {isShopReport ? (
+              <div className="grid gap-3 sm:grid-cols-2" aria-label="Shop expense filters">
+                <FormSelect
+                  label="Expense category"
+                  value={shopCategory}
+                  options={[
+                    { value: 'all', label: 'All categories' },
+                    ...[...EXPENSE_CATEGORIES, 'Other (Legacy)'].map((c) => ({
+                      value: c,
+                      label: c,
+                    })),
+                  ]}
+                  onValueChange={(v) => {
+                    setShopCategory(v)
+                    setPage(1)
+                  }}
+                />
+                <FormSelect
+                  label="Payment status"
+                  value={shopStatus}
+                  options={[
+                    { value: 'all', label: 'All statuses' },
+                    ...PAYMENT_STATUSES.map((p) => ({ value: p, label: p })),
+                  ]}
+                  onValueChange={(v) => {
+                    setShopStatus(v)
+                    setPage(1)
+                  }}
+                />
+              </div>
             ) : null}
             {report.data?.summary.length ? (
               <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Report totals">

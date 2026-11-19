@@ -64,6 +64,18 @@ export function BranchDashboard() {
               isLoading={view.isLoading}
               value={t && formatAED(t.shop_expenses_excl_savings)}
             />
+            <StatCard
+              label="Unpaid Shop Expenses"
+              isLoading={view.isLoading}
+              value={t && formatAED(t.shop_outstanding)}
+              description="Owed to suppliers from these reports"
+            />
+            <StatCard
+              label="Net Cash (after actual payments)"
+              isLoading={view.isLoading}
+              value={t && formatAED(t.net_cash)}
+              description="Cash received − cash paid − savings"
+            />
             <StatCard label="Total Orders" isLoading={view.isLoading} value={t?.total_orders} />
           </div>
           <SectionCard title="Missing reports">

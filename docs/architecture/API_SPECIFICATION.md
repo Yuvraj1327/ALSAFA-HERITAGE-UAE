@@ -22,7 +22,7 @@ Conceptual plan only; nothing is implemented. Base path `/api/v1`. All routes re
 
 | Method Path | Purpose | Role | Request | Response | Validation |
 |---|---|---|---|---|---|
-| POST /daily-reports | submit report | O/B | date, branch (B: ignored), total_sales, orders, cash, pos, bank_transfer, link_payment, shop_expenses, shop_savings | report + total_received, difference, check | sales > 0; date not future (Dubai); savings ≤ expenses; amounts ≥ 0; unique branch/date → 409 |
+| POST /daily-reports | submit report (0021: itemised `expenses[]` replace `shop_expenses`; see docs/finance/ITEMISED_SHOP_EXPENSES.md §6) | O/B | date, branch (B: ignored), total_sales, orders, cash, pos, bank_transfer, link_payment, expenses[], shop_savings | report + total_received, difference, check | sales > 0; date not future (Dubai); savings ≤ expenses; amounts ≥ 0; unique branch/date → 409 |
 | GET /daily-reports | history | O/B | branch (O), from, to, page | reports + check | B limited to own branch |
 | GET /daily-reports/{id} | detail | O/B | — | report | branch scope |
 | POST /daily-reports/{id}/void | owner correction (pending D4) | O | reason | report | reason required; audited |

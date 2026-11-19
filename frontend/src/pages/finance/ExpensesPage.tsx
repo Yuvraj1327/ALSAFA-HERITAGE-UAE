@@ -33,7 +33,7 @@ import { PAY_ACCOUNTS, type Expense } from '@/schemas/finance'
 import { dubaiToday, formatAED, formatDate } from '@/utils/format'
 import { TabList, TabPanel } from '@/components/common/tabs'
 import { ExpenseDialog } from './ExpenseDialog'
-import { OtherExpensesTab } from './OtherExpensesTab'
+import { ShopExpensesTab } from './ShopExpensesTab'
 
 const PAGE_SIZE = 25
 const ALL = 'all'
@@ -231,7 +231,7 @@ export function ExpensesPage() {
   return (
     <PageContainer
       title="Expenses & Savings"
-      description="Head office expenses and savings. Shop expenses are entered in the Daily Report."
+      description="Itemised shop expenses (from the Daily Reports) and head office expenses and savings."
       actions={
         <Can module="expenses" action="create">
           <Button
@@ -262,11 +262,11 @@ export function ExpensesPage() {
         onChange={setTab}
         tabs={[
           { value: 'head-office', label: 'Head office expenses' },
-          { value: 'other', label: 'Other Expenses' },
+          { value: 'shop', label: 'Shop expenses' },
         ]}
       />
-      <TabPanel value="other" active={tab === 'other'}>
-        <OtherExpensesTab />
+      <TabPanel value="shop" active={tab === 'shop'}>
+        <ShopExpensesTab />
       </TabPanel>
       <TabPanel value="head-office" active={tab === 'head-office'}>
         <div className="grid gap-4 sm:grid-cols-3" aria-label="Expense totals">

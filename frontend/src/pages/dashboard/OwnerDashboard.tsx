@@ -421,6 +421,83 @@ export function OwnerDashboard() {
             />
           </div>
 
+          <SectionCard
+            title="Shop expenses & suppliers"
+            description="Itemised shop expenses are counted when incurred, including credit purchases. Only what is actually paid reduces Cash, ENBD and ADCB."
+          >
+            <div
+              className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4"
+              data-testid="expense-kpis"
+            >
+              <StatCard
+                label="Total Shop Expenses"
+                icon={Banknote}
+                isLoading={loading}
+                value={k && formatAED(k.total_shop_expenses)}
+                description={k ? `Itemised + savings ${formatAED(k.total_savings)}` : undefined}
+              />
+              <StatCard
+                label="Paid Shop Expenses"
+                icon={Banknote}
+                tone="green"
+                isLoading={loading}
+                value={k && formatAED(k.shop_expenses_paid)}
+              />
+              <StatCard
+                label="Unpaid Shop Expenses"
+                icon={Banknote}
+                tone="amber"
+                isLoading={loading}
+                value={k && formatAED(k.shop_expenses_unpaid)}
+                description={
+                  k ? `Outstanding in total ${formatAED(k.shop_expenses_outstanding)}` : undefined
+                }
+              />
+              <StatCard
+                label="Partial Payments"
+                icon={Banknote}
+                isLoading={loading}
+                value={k && formatAED(k.shop_partial_payments)}
+                description="Paid so far on partly paid expenses"
+              />
+              <StatCard
+                label="Supplier Outstanding"
+                icon={Building2}
+                tone="purple"
+                isLoading={loading}
+                value={k && formatAED(k.supplier_outstanding)}
+                description="Opening + valid dues − valid payments"
+              />
+              <StatCard
+                label="Net Cash for the Period"
+                icon={Wallet}
+                isLoading={loading}
+                value={k && formatAED(k.net_cash_period)}
+                description="Cash received − cash actually paid − savings"
+              />
+              <StatCard
+                label="Net Cash in Hand"
+                icon={Wallet}
+                tone="blue"
+                isLoading={loading}
+                value={k?.net_cash_in_hand ? formatAED(k.net_cash_in_hand) : undefined}
+                description={
+                  d && d.balances.status !== 'ok' ? 'Not configured' : 'At the end of the period'
+                }
+              />
+              <StatCard
+                label="ENBD / ADCB"
+                icon={Wallet}
+                isLoading={loading}
+                value={
+                  d?.balances.enbd && d.balances.adcb
+                    ? `${formatAED(d.balances.enbd)} / ${formatAED(d.balances.adcb)}`
+                    : undefined
+                }
+              />
+            </div>
+          </SectionCard>
+
           <div className="grid gap-6 lg:grid-cols-2">
             <SectionCard
               className="lg:col-span-1 xl:col-span-1"

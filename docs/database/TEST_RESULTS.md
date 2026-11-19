@@ -46,3 +46,14 @@ Reconciliation: MAIN 10-01 matches; JERNAS 10-01 received 200 vs sales 500 -> Di
 - Calculations were checked against hand-computed values from the PDF's text rules, **not** against the original `app_balances()` (SQL file unavailable) **[VERIFY]**.
 - Performance/index usage with realistic data volumes not measured.
 - Backup/restore, Alembic wrapping and downgrade scripts: Step 4/12.
+
+## Migration 0021 (itemised shop expenses) — run against a real PostgreSQL 16.2
+
+| Suite | Result |
+|---|---|
+| `database/tests` (incl. new `test_itemised_expenses.py`: 6 categories, paid/unpaid/partial, supplier due + payment, no double count, edit/void reconcile, negative-supplier refusal, RLS/identity/branch checks, frozen legacy JSON, historical migration, stop-on-bad-history, late-failure rollback) | 223 passed, 2 failed (pre-existing, unrelated: `test_audit_does_not_store_secrets`, `test_preferences_are_private_per_user`) |
+| `backend/tests` (incl. new `test_itemised_expenses_api.py`, 26 tests) | 691 passed, 4 failed (pre-existing, unrelated), 1 skipped (`TEST_DATABASE_URL` not set; passes when set) |
+| `frontend` (`vitest`, `tsc -b`, `eslint`, `prettier --check`, `vite build`) | 350 passed; typecheck, lint, format and build clean |
+
+Baseline before the change (same machine, same database): backend 658 passed / 4 failed / 1 skipped; database 171 passed / 3 failed (one of those, the table-list check, was stale for `user_preferences` and is fixed together with the new table).
+Not run: `e2e/run_e2e.py` (needs live servers; its payloads were updated but it was not executed).

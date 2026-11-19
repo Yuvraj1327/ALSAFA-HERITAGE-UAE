@@ -15,6 +15,7 @@ from app.schemas.reports import (
     DailyReportOut,
     DailyReportPage,
     ReportHistoryEntry,
+    SupplierOption,
     VoidRequest,
 )
 from app.services.dashboard_service import DashboardService
@@ -56,7 +57,17 @@ def list_reports(
     return ReportService(session).list(scope, branch_id, date_from, date_to, page, page_size)
 
 
-# NOTE: "missing" and "export/pdf" are declared before "/{report_id}" so they are not parsed as an id.
+@router.get(
+    "/supplier-options",
+    response_model=list[SupplierOption],
+    summary="Active suppliers (id + name only) for the expense rows of a daily report",
+)
+def supplier_options(session: DbSession, _scope: CreateScope) -> list[SupplierOption]:
+    """Branch Users may pick an existing active supplier; they can never create or change one."""
+    return ReportService(session).supplier_options()
+
+
+# NOTE: "supplier-options", "missing" and "export/pdf" are declared before "/{report_id}" so they are not parsed as an id.
 @router.get(
     "/export/pdf",
     summary="Download daily reports as a branded PDF (Owner: any branch; Branch User: own branch)",

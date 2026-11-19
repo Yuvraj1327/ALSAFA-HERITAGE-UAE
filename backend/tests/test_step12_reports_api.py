@@ -103,6 +103,7 @@ def wipe(admin) -> Iterator[None]:
         "pos_settlements",
         "cash_transfers",
         "head_office_expenses",
+        "daily_report_expenses",
         "daily_reports",
         "opening_branch_cash",
         "opening_balances",
@@ -178,12 +179,22 @@ def opening_body(bid, dues=None) -> dict:
 
 
 def report(admin, branch, d, sales, cash=0, pos=0, tr=0, link=0, exp=0, sav=0, orders=1) -> None:
-    admin.execute(
-        """insert into public.daily_reports (report_date, branch_id, total_sales, order_count, cash_received,
-                  pos_amount, bank_transfer, link_payment, shop_expenses, shop_savings)
-           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-        (d, branch, sales, orders, cash, pos, tr, link, exp, sav),
-    )
+    # `exp` = total incl. savings; the rest is one Paid-from-Cash line, inserted in the same transaction
+    # (the database enforces shop_expenses = SUM(lines) + savings at commit).
+    with admin.transaction():
+        rid = admin.execute(
+            """insert into public.daily_reports (report_date, branch_id, total_sales, order_count, cash_received,
+                      pos_amount, bank_transfer, link_payment, shop_expenses, shop_savings)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
+            (d, branch, sales, orders, cash, pos, tr, link, exp, sav),
+        ).fetchone()[0]
+        if exp - sav > 0:
+            admin.execute(
+                """insert into public.daily_report_expenses (report_id, branch_id, expense_date, line_no, category,
+                          description, amount, payment_status, payment_account, amount_paid)
+                   values (%s,%s,%s,1,'Other','seed expense',%s,'Paid','Cash',%s)""",
+                (rid, branch, d, exp - sav, exp - sav),
+            )
 
 
 def category(admin, name="Utilities") -> str:
@@ -302,7 +313,8 @@ def dec(v) -> Decimal:
 # ---------------------------------------------------------------- 1. access control
 KEYS = [
     "sales_trend", "sales_by_branch", "collections_trend", "collections_by_branch", "reconciliation_by_branch",
-    "reconciliation_by_date", "shop_expenses_by_branch", "shop_expenses_by_date", "ho_expenses", "ho_by_category",
+    "reconciliation_by_date", "shop_expenses_by_branch", "shop_expenses_by_date", "shop_expenses_by_category",
+    "shop_expense_items", "shop_expenses_by_supplier", "shop_expense_payments", "ho_expenses", "ho_by_category",
     "ho_by_source", "ho_by_branch", "savings", "cash_accounts", "branch_cash", "ledger", "supplier_balances",
     "supplier_payments", "employees", "employees_by_branch", "visas_passports", "leave_cases", "licenses",
     "license_renewals", "rentals", "rentals_by_branch", "rental_renewals", "pdc_summary", "pdc_by_branch",
@@ -318,9 +330,9 @@ def test_catalog_lists_every_report(world) -> None:
 def test_every_report_runs_with_real_data(world) -> None:
     for key in KEYS:
         j = rep(world, key)
-        assert (
-            j["key"] == key and j["columns"] and j["filters"]["branch_name"] == "All Branches"
-        ), key
+        assert j["key"] == key and j["columns"] and j["filters"]["branch_name"] == "All Branches", (
+            key
+        )
         for r in j["rows"]:
             assert set(r) >= {c["key"] for c in j["columns"]}, (key, r)
 
@@ -707,7 +719,7 @@ def test_charts_are_complete_filtered_and_have_empty_states(world, bid) -> None:
     j = world.get("/reports/charts", date_from=iso(D1), date_to=iso(TODAY)).json()
     keys = [c["key"] for c in j["charts"]]
     assert keys == ["sales_trend", "branch_sales", "collections_method", "expenses_split", "expense_categories",
-                    "savings_trend", "cash_bank", "supplier_outstanding", "employee_status", "cheque_status", "task_status"]  # fmt: skip
+                    "shop_expense_categories", "shop_payment_status", "savings_trend", "cash_bank", "supplier_outstanding", "employee_status", "cheque_status", "task_status"]  # fmt: skip
     by = {c["key"]: c for c in j["charts"]}
     assert sum(dec(p["values"]["Sales"]) for p in by["sales_trend"]["points"]) == Decimal("2300.00")
     assert {p["label"]: p["values"]["Amount"] for p in by["collections_method"]["points"]}[
@@ -715,6 +727,11 @@ def test_charts_are_complete_filtered_and_have_empty_states(world, bid) -> None:
     ] == "1300.00"
     assert by["supplier_outstanding"]["points"][0]["values"]["Outstanding"] == "850.00"
     assert by["employee_status"]["points"] == [] and by["employee_status"]["empty_message"]
+    # itemised shop expenses: the category chart adds up to the shop expenses excluding savings (seeded as 'Other')
+    cats = by["shop_expense_categories"]["points"]
+    assert sum(dec(p["values"]["Amount"]) for p in cats) == sum(
+        dec(p["values"]["Amount"]) for p in by["expenses_split"]["points"][:1]
+    )
     one = world.get(
         "/reports/charts", date_from=iso(D1), date_to=iso(TODAY), branch_id=str(bid["JERNAS"])
     ).json()

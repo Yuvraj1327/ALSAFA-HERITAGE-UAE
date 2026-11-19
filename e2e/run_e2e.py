@@ -214,7 +214,7 @@ def main() -> int:
                 )
 
         only = os.environ.get("E2E_ONLY", "")
-        only12 = only in ("12", "13")
+        only12 = only in ("12", "13", "itemised")
         if not only12:
             run_api_scenarios(users, dsn, b1, b2)
         with sync_playwright() as pw:
@@ -229,9 +229,12 @@ def main() -> int:
                 run_step9_scenarios(browser, users, dsn, b1, b2)
                 run_step10_scenarios(browser, users, dsn, b1, b2)
                 run_step11_scenarios(browser, users, dsn, b1, b2)
-            if only != "13":
+            if only not in ("13", "itemised"):
                 run_step12_scenarios(browser, users, dsn, b1, b2)
-            run_step13_scenarios(browser, users, dsn, b1, b2)
+            if only != "itemised":
+                run_step13_scenarios(browser, users, dsn, b1, b2)
+            if only in ("", "itemised"):
+                run_itemised_scenarios(browser, users, dsn, b1, b2)
             browser.close()
         if not only12:
             run_provisioning_scenarios(dsn, b2)
@@ -1197,7 +1200,16 @@ def run_step7_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2: 
             pos_amount="200.00",
             bank_transfer="100.00",
             link_payment="50.00",
-            shop_expenses="300.00",
+            # itemised rows: 200 itemised + 100 savings = 300 total shop expenses (computed by the server)
+            expenses=[
+                dict(
+                    category="Food",
+                    description="Staff lunch",
+                    amount="200.00",
+                    payment_status="Paid",
+                    payment_account="Cash",
+                )
+            ],
             shop_savings="100.00",
         )
         base.update(over)
@@ -1244,7 +1256,7 @@ def run_step7_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2: 
             {"report_date": (today + timedelta(days=1)).isoformat()},
             {"total_sales": "0"},
             {"cash_received": "-1"},
-            {"shop_savings": "999.00"},
+            {"shop_expenses": "300.00"},  # the old typed total is refused: totals are computed
         ):
             s, _e = http(
                 "POST",
@@ -1327,8 +1339,15 @@ def run_step7_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2: 
         page.get_by_label("Number of Orders").fill("4")
         page.get_by_label("Cash (AED)").fill("300")
         page.get_by_label("POS (AED)").fill("100")
-        page.get_by_label("Shop Expenses (AED)").fill("80")
+        # 0021: shop expenses are itemised rows now: 50 itemised + 30 savings = 80 total shop expenses
+        page.get_by_role("button", name="Add expense row").click()
+        row = page.get_by_role("group", name=re.compile(r"^Expense row \d+$")).last
+        row.get_by_role("combobox", name=re.compile("Expense Category")).click()
+        page.get_by_role("option", name="Food", exact=True).click()
+        row.get_by_label("Description").fill("Staff lunch")
+        row.get_by_label("Amount (AED)", exact=True).fill("50")
         page.get_by_label("Savings (AED)").fill("30")
+        expect(page.get_by_test_id("shop-expenses-total")).to_contain_text("80.00")
         page.get_by_role("button", name="Review & submit").click()
         page.get_by_role("alertdialog").get_by_role("button", name="Submit report").click()
         summary = page.get_by_test_id("submitted-summary")
@@ -1380,7 +1399,6 @@ def run_step7_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2: 
                 pos_amount="0",
                 bank_transfer="0",
                 link_payment="0",
-                shop_expenses="0",
                 shop_savings="0",
             ),
             tok["owner"],
@@ -2784,7 +2802,7 @@ def run_step12_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2:
     @scenario("STEP12 API: every report responds and its CSV totals equal the screen totals")
     def _() -> None:
         st, cat = get("/reports/catalog")
-        assert st == 200 and len(cat) == 36, len(cat)
+        assert st == 200 and len(cat) == 40, len(cat)  # 36 + 4 itemised shop expense reports (0021)
         for item in cat:
             if item["key"] == "activity":
                 continue
@@ -2802,12 +2820,12 @@ def run_step12_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2:
 
     _()
 
-    @scenario("STEP12 API: Excel export opens, charts return eleven entries, bad filters give 422")
+    @scenario("STEP12 API: Excel export opens, charts return thirteen entries, bad filters give 422")
     def _() -> None:
         st, body, ctype = raw(f"/reports/sales_by_branch/export?{rng}&format=xlsx")
         assert st == 200 and "spreadsheetml" in ctype and body[:2] == b"PK"
         st, ch = get(f"/reports/charts?{rng}")
-        assert st == 200 and len(ch["charts"]) == 11, ch
+        assert st == 200 and len(ch["charts"]) == 13, ch  # 11 + 2 shop expense charts (0021)
         assert (
             get(f"/reports/sales_trend?date_from={today}&date_to={today - timedelta(days=1)}")[0]
             == 422
@@ -2870,7 +2888,7 @@ def run_step12_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2:
             page.get_by_role("button", name="Export Excel").click()
         assert dl2.value.suggested_filename.endswith(".xlsx")
         page.get_by_role("tab", name="Charts").click()
-        expect(page.get_by_label("Charts").locator("section")).to_have_count(11)
+        expect(page.get_by_label("Charts").locator("section")).to_have_count(13)
         page.screenshot(path=str(shots / "step12_charts_1440.png"), full_page=True)
         assert not problems, problems
         ctx.close()
@@ -3580,6 +3598,385 @@ def run_step13_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2:
             ctx.close()
 
         _()
+
+
+def run_itemised_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2: tuple) -> None:
+    """Migration 0021 - itemised shop expenses, supplier integration and payment-based cash, driven through the REAL
+    UI (Chrome) against the REAL API and database. Runs after the other money scenarios, so every balance is asserted as a
+    before/after DIFFERENCE and every report-level figure is read from rows created here (own date, own suppliers)."""
+    import csv
+    import io
+    import tempfile
+    from datetime import datetime, timedelta
+    from decimal import Decimal as Dc
+    from zoneinfo import ZoneInfo
+
+    import openpyxl
+    from pypdf import PdfReader
+
+    today = datetime.now(ZoneInfo("Asia/Dubai")).date()
+    A = f"{API}/api/v1"
+    tok = {
+        k: {"Authorization": "Bearer " + sign_in_token(users[k]["email"], users[k]["password"])}
+        for k in ("owner", "branch")
+    }
+
+    def get(path: str, who: str = "owner", **params) -> tuple[int, dict | list]:
+        q = ("?" + "&".join(f"{k}={v}" for k, v in params.items())) if params else ""
+        return http("GET", f"{A}{path}{q}", headers=tok[who])  # type: ignore[return-value]
+
+    def post(path: str, body: dict, who: str = "owner") -> tuple[int, dict]:
+        return http("POST", f"{A}{path}", body, tok[who])
+
+    with psycopg.connect(dsn, autocommit=True) as c:
+        if c.execute("select count(*) from public.opening_balances").fetchone()[0] == 0:  # E2E_ONLY=itemised: no earlier scenario ran
+            c.execute("insert into public.opening_balances (as_of_date, receipts_bank, enbd_balance, adcb_balance, pos_pending, savings_brought_forward) values (%s,'ENBD',5000,5000,0,0)", (today - timedelta(days=30),))
+            for bid_, in c.execute("select id from public.branches").fetchall():
+                c.execute("insert into public.opening_branch_cash (branch_id, amount) values (%s, 1000) on conflict do nothing", (bid_,))
+        as_of, bank = c.execute("select as_of_date, receipts_bank from public.opening_balances").fetchone()
+        used = {r[0] for r in c.execute("select report_date from public.daily_reports where voided_at is null and branch_id=%s", (b1[0],))}
+    d = next(today - timedelta(days=i) for i in range(1, 60) if today - timedelta(days=i) > as_of and today - timedelta(days=i) not in used)
+    mark = uuid.uuid4().hex[:6]
+    chem, paper = f"E2E Chem {mark}", f"E2E Paper {mark}"
+    ids = {}
+    for nm in (chem, paper):
+        s_, r_ = post("/suppliers", {"name": nm})
+        assert s_ == 201, r_
+        ids[nm] = r_["id"]
+    bal = lambda: {k: Dc(v) for k, v in get("/cash-banks/summary")[1].items() if k in ("cash_in_hand", "enbd", "adcb", "pos_pending", "total_savings")}  # type: ignore[union-attr]
+    base = bal()
+    state: dict = {}
+
+    def open_page(role: str, w: int = 1440, h: int = 900):
+        ctx = browser.new_context(viewport={"width": w, "height": h}, accept_downloads=True)
+        page = ctx.new_page()
+        page.set_default_timeout(15000)
+        problems: list[str] = []
+        page.on("console", lambda m: problems.append(f"console.{m.type}: {m.text}") if m.type in ("error", "warning") else None)
+        page.on("pageerror", lambda e: problems.append(f"pageerror: {e}"))
+        login_ui(page, users[role]["email"], users[role]["password"])
+        expect(page.get_by_role("heading", name="Dashboard", level=1)).to_be_visible()
+        return ctx, page, problems
+
+    def add_row(page: Page, category: str, desc: str, amount: str) -> "object":
+        page.get_by_role("button", name="Add expense row").click()
+        row = page.get_by_role("group", name=re.compile(r"^Expense row \d+$")).last
+        row.get_by_role("combobox", name=re.compile("Expense Category")).click()
+        page.get_by_role("option", name=category, exact=True).click()
+        row.get_by_label("Description").fill(desc)
+        row.get_by_label("Amount (AED)", exact=True).fill(amount)
+        return row
+
+    def pick(page: Page, row, label: str, option: str) -> None:
+        row.get_by_role("combobox", name=re.compile(label)).click()
+        page.get_by_role("option", name=option, exact=True).click()
+
+    @scenario("ITEMISED UI: Branch User submits a report with Paid / Unpaid / Partial rows and savings; totals are calculated live")
+    def _() -> None:
+        ctx, page, problems = open_page("branch")
+        page.goto(f"{WEB}/daily-reports")
+        form = page.get_by_role("form", name="Daily report form")
+        expect(form).to_be_visible()
+        page.get_by_label("Report Date").fill(d.isoformat())
+        page.get_by_label("Total Sales (AED)").fill("2000")
+        page.get_by_label("Number of Orders").fill("12")
+        page.get_by_label("Cash (AED)", exact=True).fill("800")
+        page.get_by_label("POS (AED)", exact=True).fill("400")
+        page.get_by_label("Bank Transfers (AED)").fill("300")
+        page.get_by_label("Payment Links (AED)").fill("100")
+        page.get_by_label("Savings (AED)", exact=True).fill("40")
+        add_row(page, "Food", "Staff lunch", "120")  # Paid, Cash (defaults)
+        rb = add_row(page, "Raw Material", "Detergent drums", "800")
+        pick(page, rb, "Payment Status", "Unpaid")
+        pick(page, rb, "^Supplier", chem)
+        expect(rb.get_by_role("combobox", name=re.compile("Payment Account"))).to_be_disabled()
+        rc = add_row(page, "Petrol", "Fuel card", "300")
+        pick(page, rc, "Payment Status", "Partial")
+        pick(page, rc, "^Supplier", paper)
+        pick(page, rc, "Payment Account", "ENBD")
+        rc.get_by_label("Amount Paid (AED)").fill("100")
+        expect(rc.get_by_label("Outstanding Amount (AED)")).to_have_value("200.00")
+        expect(page.get_by_test_id("itemised-total")).to_contain_text("1,220.00")
+        expect(page.get_by_test_id("shop-expenses-total")).to_contain_text("1,260.00")
+        expect(page.get_by_test_id("paid-total")).to_contain_text("220.00")
+        expect(page.get_by_test_id("outstanding-total")).to_contain_text("1,000.00")
+        # client-side guard: an Unpaid row without a supplier is blocked and nothing is sent
+        page.get_by_role("button", name="Add expense row").click()
+        r4 = page.get_by_role("group", name=re.compile(r"^Expense row \d+$")).last
+        r4.get_by_role("combobox", name=re.compile("Expense Category")).click()
+        page.get_by_role("option", name="Other", exact=True).click()
+        r4.get_by_label("Description").fill("Parking")
+        r4.get_by_label("Amount (AED)", exact=True).fill("10")
+        pick(page, r4, "Payment Status", "Unpaid")
+        page.get_by_role("button", name="Review & submit").click()
+        expect(page.get_by_text("Select the supplier this is owed to")).to_be_visible()
+        r4.get_by_role("button", name=re.compile("Remove expense row")).click()
+        page.get_by_role("button", name="Review & submit").click()
+        dlg = page.get_by_role("alertdialog")
+        expect(dlg).to_contain_text("Itemised expenses (3)")
+        with page.expect_response(lambda r: r.url.endswith("/daily-reports") and r.request.method == "POST") as resp:
+            dlg.get_by_role("button", name="Submit report").click()
+        assert resp.value.status == 201, resp.value.text()
+        state["report"] = resp.value.json()
+        expect(page.get_by_test_id("submitted-summary")).to_contain_text("640.00")  # net cash 800-120-40
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    @scenario("ITEMISED DB/API: lines, supplier dues/payments and every balance moved exactly once (hand-computed)")
+    def _() -> None:
+        r = state["report"]
+        assert r["shop_expenses"] == "1260.00" and r["shop_expenses_excl_savings"] == "1220.00", r
+        assert (r["expenses_paid"], r["expenses_outstanding"], r["net_cash"]) == ("220.00", "1000.00", "640.00"), r
+        after = bal()
+        recv = {"ENBD": Dc("0"), "ADCB": Dc("0")}
+        recv[bank] += Dc("300") + Dc("100")
+        assert after["cash_in_hand"] - base["cash_in_hand"] == Dc("800") - Dc("120") - Dc("40")
+        assert after["enbd"] - base["enbd"] == recv["ENBD"] - Dc("100")
+        assert after["adcb"] - base["adcb"] == recv["ADCB"]
+        assert after["pos_pending"] - base["pos_pending"] == Dc("400")
+        assert after["total_savings"] - base["total_savings"] == Dc("40")
+        s_c = get(f"/suppliers/{ids[chem]}")[1]
+        s_p = get(f"/suppliers/{ids[paper]}")[1]
+        assert (s_c["new_dues"], s_c["total_paid"], s_c["outstanding"]) == ("800.00", "0.00", "800.00")  # type: ignore[index]
+        assert (s_p["new_dues"], s_p["total_paid"], s_p["outstanding"]) == ("300.00", "100.00", "200.00")  # type: ignore[index]
+        with psycopg.connect(dsn, autocommit=True) as c:
+            assert c.execute("select count(*) from public.daily_report_expenses where report_id=%s and voided_at is null", (r["id"],)).fetchone()[0] == 3
+            dup = c.execute("select count(*) from (select source_expense_id, kind from public.supplier_entries where source_expense_id is not null and voided_at is null group by 1,2 having count(*)>1) x").fetchone()[0]
+            assert dup == 0
+            assert c.execute("select count(*) from public.supplier_entries where source_expense_id is not null and voided_at is null").fetchone()[0] == 3  # 2 dues + 1 payment
+
+    _()
+
+    @scenario("ITEMISED UI: Owner sees the rows by category/branch/supplier/status, filters work, supplier ledger shows the source")
+    def _() -> None:
+        ctx, page, problems = open_page("owner")
+        page.goto(f"{WEB}/expenses")
+        page.get_by_role("tab", name="Shop expenses").click()
+        page.get_by_label("Shop expenses from").fill(d.isoformat())
+        page.get_by_label("Shop expenses to").fill(d.isoformat())
+        table = page.get_by_role("table", name="Itemised shop expenses")
+        for text in ("Staff lunch", "Detergent drums", "Fuel card", chem, paper):
+            expect(table.get_by_text(text).first).to_be_visible()
+        page.get_by_role("combobox", name="Shop expenses branch").click()
+        page.get_by_role("option", name=str(b1[1]), exact=True).click()
+        page.get_by_role("combobox", name="Shop expenses payment status").click()
+        page.get_by_role("option", name="Unpaid", exact=True).click()
+        expect(table.get_by_text("Detergent drums")).to_be_visible()
+        expect(table.get_by_text("Staff lunch")).to_have_count(0)
+        for tab, cap, label in (("By category", "Shop expenses by category", "Raw Material"), ("By supplier", "Shop expenses by supplier", chem), ("By payment status", "Shop expenses by payment status", "Unpaid")):
+            page.get_by_role("tab", name=tab).click()
+            expect(page.get_by_role("table", name=cap).get_by_text(label)).to_be_visible()
+        page.goto(f"{WEB}/suppliers/{ids[chem]}")
+        led = page.get_by_role("table", name="Supplier dues and payments")
+        expect(led.get_by_text("Daily report · Raw Material")).to_be_visible()
+        expect(page.get_by_role("button", name=re.compile("^Void due"))).to_have_count(0)  # generated rows cannot be voided here
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    @scenario("ITEMISED UI: Owner edits the report - old rows and supplier rows are voided and replaced atomically, no duplicates")
+    def _() -> None:
+        ctx, page, problems = open_page("owner")
+        page.goto(f"{WEB}/daily-reports")
+        page.get_by_role("button", name=f"Edit report {b1[1]} {d.isoformat()}").click()
+        dlg = page.get_by_role("dialog", name="Edit daily report")
+        rows = dlg.get_by_role("group", name=re.compile(r"^Expense row \d+$"))
+        expect(rows).to_have_count(3)
+        rows.nth(1).get_by_label("Amount (AED)", exact=True).fill("700")
+        dlg.get_by_label(re.compile("Reason for change")).fill("Supplier invoice was 700")
+        dlg.get_by_role("button", name="Save changes").click()
+        with page.expect_response(lambda r: "/daily-reports/" in r.url and r.request.method == "PUT") as resp:
+            page.get_by_role("alertdialog").get_by_role("button", name="Confirm and save").click()
+        assert resp.value.status == 200, resp.value.text()
+        j = resp.value.json()
+        assert j["shop_expenses"] == "1160.00" and j["expenses_outstanding"] == "900.00", j
+        assert get(f"/suppliers/{ids[chem]}")[1]["outstanding"] == "700.00"  # type: ignore[index]
+        with psycopg.connect(dsn, autocommit=True) as c:
+            live = c.execute("select count(*) from public.supplier_entries where source_expense_id is not null and voided_at is null").fetchone()[0]
+            gone = c.execute("select count(*) from public.supplier_entries where source_expense_id is not null and voided_at is not null").fetchone()[0]
+            assert (live, gone) == (3, 3), (live, gone)
+            assert c.execute("select count(*) from (select source_expense_id, kind from public.supplier_entries where source_expense_id is not null and voided_at is null group by 1,2 having count(*)>1) x").fetchone()[0] == 0
+        state["report"] = j
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    @scenario("ITEMISED API+UI: partial and final supplier payments reach zero; later correction that would go negative is refused and changes nothing")
+    def _() -> None:
+        before = bal()
+        key = {"Cash": "cash_in_hand", "ENBD": "enbd", "ADCB": "adcb"}
+
+        def pay(supplier: str, amount: str | None) -> str:
+            """Pay from whichever account holds the most money (overdrafts are refused by design); returns the account."""
+            cur = bal()
+            acct = max(key, key=lambda k: cur[key[k]])
+            if amount is not None:
+                assert cur[key[acct]] >= Dc(amount), (acct, cur)
+            body = {"paid_from": acct, **({"amount": amount} if amount is not None else {})}
+            path = f"/suppliers/{ids[supplier]}/" + ("payments" if amount is not None else "mark-paid")
+            st_, resp = post(path, body)
+            assert st_ == 201, (path, body, st_, resp)
+            return acct
+
+        a1 = pay(chem, "300.00")
+        assert get(f"/suppliers/{ids[chem]}")[1]["outstanding"] == "400.00"  # type: ignore[index]
+        a2 = pay(paper, None)  # Mark as Paid: the outstanding 200
+        a3 = pay(chem, "400.00")
+        for nm in (chem, paper):
+            assert get(f"/suppliers/{ids[nm]}")[1]["outstanding"] == "0.00"  # type: ignore[index]
+        after = bal()
+        moved = {k: Dc("0") for k in key}
+        for acct, amt in ((a1, 300), (a2, 200), (a3, 400)):
+            moved[acct] -= Dc(amt)
+        for acct, k in key.items():
+            assert after[k] - before[k] == moved[acct], (acct, after[k] - before[k], moved[acct])
+        # the edit that would void the (now fully paid) 700 due is refused as a whole
+        ctx, page, problems = open_page("owner")
+        page.goto(f"{WEB}/daily-reports")
+        page.get_by_role("button", name=f"Edit report {b1[1]} {d.isoformat()}").click()
+        dlg = page.get_by_role("dialog", name="Edit daily report")
+        dlg.get_by_role("group", name=re.compile(r"^Expense row \d+$")).nth(1).get_by_label("Amount (AED)", exact=True).fill("650")
+        dlg.get_by_label(re.compile("Reason for change")).fill("Trying to lower it again")
+        dlg.get_by_role("button", name="Save changes").click()
+        with page.expect_response(lambda r: "/daily-reports/" in r.url and r.request.method == "PUT") as resp:
+            page.get_by_role("alertdialog").get_by_role("button", name="Confirm and save").click()
+        assert resp.value.status == 422 and resp.value.json()["error"]["code"] == "negative_balance", resp.value.text()
+        expect(page.get_by_text(re.compile("negative balance")).first).to_be_visible()
+        assert bal() == after
+        assert get(f"/suppliers/{ids[chem]}")[1]["outstanding"] == "0.00"  # type: ignore[index]
+        ctx.close()
+
+    _()
+
+    @scenario("ITEMISED UI: Owner dashboard and Cash & Banks show the same figures as the API; no console errors")
+    def _() -> None:
+        ctx, page, problems = open_page("owner")
+        s_, dash = get("/dashboard/owner", mode="day", date=d.isoformat())
+        assert s_ == 200
+        page.goto(f"{WEB}/")
+        cards = page.get_by_test_id("expense-kpis")
+        expect(cards).to_be_visible()
+        for label in ("Total Shop Expenses", "Paid Shop Expenses", "Unpaid Shop Expenses", "Partial Payments", "Supplier Outstanding", "Net Cash for the Period", "Net Cash in Hand"):
+            expect(cards.get_by_text(label, exact=True)).to_be_visible()
+        b = bal()
+        page.goto(f"{WEB}/cash-banks")
+        expect(page.get_by_text(re.compile(r"Cash in hand", re.I)).first).to_be_visible()
+        for v in (b["cash_in_hand"], b["enbd"], b["adcb"]):
+            expect(page.locator("body")).to_contain_text(f"{v:,.2f}")  # waits for the balances to load
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    @scenario("ITEMISED permissions: Branch User cannot reach owner pages/APIs, can only list active supplier names, and cannot edit, void or manage suppliers")
+    def _() -> None:
+        rid = state["report"]["id"]
+        for path in ("/expenses/shop", "/expenses/shop/summary", "/suppliers", "/dashboard/owner", f"/daily-reports/{rid}/history", "/reports/shop_expense_items"):
+            assert get(path, "branch")[0] == 403, path
+        s_, opts = get("/daily-reports/supplier-options", "branch")
+        assert s_ == 200 and {o["name"] for o in opts} >= {chem, paper} and all(set(o) == {"id", "name"} for o in opts), opts  # type: ignore[union-attr]
+        assert http("PUT", f"{A}/daily-reports/{rid}", {"reason": "x"}, tok["branch"])[0] in (403, 422)
+        assert post(f"/daily-reports/{rid}/void", {"reason": "nope nope"}, "branch")[0] == 403
+        assert post("/suppliers", {"name": "Sneaky"}, "branch")[0] == 403
+        assert post(f"/suppliers/{ids[chem]}/payments", {"amount": "1", "paid_from": "Cash"}, "branch")[0] == 403
+        # cross-branch: a Branch User cannot submit for, or read, another branch
+        s_, e = post("/daily-reports", {"report_date": d.isoformat(), "branch_id": str(b2[0]), "total_sales": "10", "expenses": []}, "branch")
+        assert s_ == 403, e
+        ctx, page, _p = open_page("branch")
+        for url in ("/expenses", "/suppliers", "/reports"):
+            page.goto(f"{WEB}{url}")
+            expect(page.get_by_text("Access denied")).to_be_visible()
+        ctx.close()
+
+    _()
+
+    @scenario("ITEMISED exports: PDF, CSV and Excel contain the itemised rows and agree with the screen/API")
+    def _() -> None:
+        ctx, page, problems = open_page("owner")
+        # PDF through the UI
+        page.goto(f"{WEB}/daily-reports")
+        page.get_by_label("PDF from date").fill(d.isoformat())
+        page.get_by_label("PDF to date (optional)").fill(d.isoformat())
+        page.get_by_role("combobox", name="PDF branch").click()
+        page.get_by_role("option", name=str(b1[1]), exact=True).click()
+        with page.expect_download() as dl:
+            page.get_by_role("button", name="Download PDF").click()
+        pdf_text = " ".join(pg.extract_text() for pg in PdfReader(dl.value.path()).pages)
+        pdf_text = " ".join(pdf_text.split())
+        for needle in ("Staff lunch", "Detergent drums", "Fuel card", chem, paper, "Unpaid", "Partial", "Net cash after actual payments", "1,160.00"):
+            assert needle in pdf_text, needle
+        # CSV + Excel through the UI (same rows as the screen)
+        page.goto(f"{WEB}/reports")
+        page.get_by_label("Start date").fill(d.isoformat())
+        page.get_by_label("End date").fill(d.isoformat())
+        page.get_by_role("tab", name="Expenses & Savings").click()
+        page.get_by_role("combobox", name="Report").click()
+        page.get_by_role("option", name="Shop expense items", exact=True).click()
+        expect(page.get_by_role("cell", name="Detergent drums").first).to_be_visible()
+        with page.expect_download() as dl:
+            page.get_by_role("button", name="Export CSV").click()
+        rows = list(csv.reader(io.StringIO(pathlib.Path(dl.value.path()).read_text(encoding="utf-8-sig"))))
+        flat = "\n".join(",".join(r) for r in rows)
+        for needle in ("Detergent drums", "Fuel card", "Staff lunch", chem, "700.00", "300.00", "120.00"):
+            assert needle in flat, needle
+        with page.expect_download() as dl:
+            page.get_by_role("button", name="Export Excel").click()
+        xlsx_path = pathlib.Path(tempfile.mkdtemp()) / "shop_expense_items.xlsx"
+        dl.value.save_as(str(xlsx_path))  # the browser's temp file has no extension; openpyxl needs one
+        wb = openpyxl.load_workbook(xlsx_path)
+        cells = [str(v) for ws in wb.worksheets for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+        assert any("Detergent drums" in v for v in cells) and any(chem in v for v in cells)
+        nums = [v for ws in wb.worksheets for row in ws.iter_rows(values_only=True) for v in row if isinstance(v, (int, float))]
+        assert 700 in nums or 700.0 in nums, nums  # amounts are real numbers in Excel, not text
+        # API export of the same report equals the screen
+        s_, rep = get("/reports/shop_expense_items", date_from=d.isoformat(), date_to=d.isoformat(), branch_id=b1[0], page_size=200)
+        assert rep["total"] == 3 and {r["description"] for r in rep["rows"]} == {"Staff lunch", "Detergent drums", "Fuel card"}  # type: ignore[index]
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+
+    @scenario("ITEMISED contract: real API responses are captured for the frontend schema check")
+    def _() -> None:
+        out = os.environ.get("E2E_CONTRACT_DIR")
+        if not out:
+            return
+        dst = pathlib.Path(out)
+        dst.mkdir(parents=True, exist_ok=True)
+        rid = state["report"]["id"]
+        rng = dict(date_from=d.isoformat(), date_to=d.isoformat())
+        calls = {
+            "daily_reports_list": get("/daily-reports", page_size=50),
+            "daily_report_one": get(f"/daily-reports/{rid}"),
+            "daily_report_history": get(f"/daily-reports/{rid}/history"),
+            "supplier_options_branch": get("/daily-reports/supplier-options", "branch"),
+            "supplier_options_owner": get("/daily-reports/supplier-options"),
+            "shop_page": get("/expenses/shop", **rng, page_size=50),
+            "shop_summary": get("/expenses/shop/summary", **rng),
+            "supplier_entries": get(f"/suppliers/{ids[chem]}/entries", page_size=50),
+            "supplier_one": get(f"/suppliers/{ids[chem]}"),
+            "dashboard_owner": get("/dashboard/owner", mode="day", date=d.isoformat()),
+            "branch_date_view": get("/branch-date-view", **rng),
+            "branch_date_view_branch": get("/branch-date-view", "branch", **rng),
+            "reports_overview": get("/reports/overview", **rng),
+            "reports_charts": get("/reports/charts", **rng),
+            "reports_catalog": get("/reports/catalog"),
+            "cash_summary": get("/cash-banks/summary"),
+            "cash_transactions": get("/cash-banks/transactions", **rng, page_size=50),
+        }
+        for key in ("shop_expenses_by_category", "shop_expense_items", "shop_expenses_by_supplier", "shop_expense_payments", "shop_expenses_by_branch", "shop_expenses_by_date"):
+            calls[f"report_{key}"] = get(f"/reports/{key}", **rng, page_size=100)
+        for name, (status, body) in calls.items():
+            assert status == 200, (name, status, body)
+            (dst / f"{name}.json").write_text(json.dumps(body))
+        (dst / "post_response.json").write_text(json.dumps(state["report"]))
+
+    _()
 
 
 def B2_NAME(b2: tuple) -> str:

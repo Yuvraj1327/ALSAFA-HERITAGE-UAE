@@ -84,6 +84,15 @@ def _totals(sums: dict[str, Any]) -> Totals:
         shop_expenses_excl_savings=calc.shop_expenses_excl_savings(
             sums["shop_expenses"], sums["shop_savings"]
         ),
+        shop_paid=money(sums.get("shop_paid")),
+        shop_unpaid=money(sums.get("shop_unpaid")),
+        shop_partial_paid=money(sums.get("shop_partial_paid")),
+        shop_outstanding=money(sums.get("shop_outstanding")),
+        cash_paid_expenses=money(sums.get("cash_paid_expenses")),
+        bank_paid_expenses=money(sums.get("bank_paid_expenses")),
+        net_cash=calc.net_cash(
+            sums["cash_received"], money(sums.get("cash_paid_expenses")), sums["shop_savings"]
+        ),
     )
 
 
@@ -318,6 +327,16 @@ class DashboardService(BaseService):
             ),
             total_orders=totals.total_orders,
             cash_bank_balance=balances.total,
+            total_shop_expenses=totals.shop_expenses,
+            shop_expenses_paid=totals.shop_paid,
+            shop_expenses_unpaid=totals.shop_unpaid,
+            shop_partial_payments=totals.shop_partial_paid,
+            shop_expenses_outstanding=totals.shop_outstanding,
+            net_cash_period=totals.net_cash,
+            net_cash_in_hand=balances.cash_in_hand,
+            supplier_outstanding=money(
+                AlertRepository(self.session).counts(today)["suppliers_owed_total"]
+            ),
         )
         return OwnerDashboard(
             mode=mode,
@@ -545,5 +564,11 @@ def _zero_sums() -> dict[str, Any]:
             "link_payment",
             "shop_expenses",
             "shop_savings",
+            "shop_paid",
+            "shop_unpaid",
+            "shop_partial_paid",
+            "shop_outstanding",
+            "cash_paid_expenses",
+            "bank_paid_expenses",
         )
     } | {"report_count": 0, "total_orders": 0}
