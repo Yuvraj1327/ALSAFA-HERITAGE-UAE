@@ -60,6 +60,20 @@ class CustomerUpdate(CustomerFields):
     pass
 
 
+class CustomerReasonIn(Strict):
+    """Archive / restore a customer: the reason is mandatory and is kept in the audit history."""
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("Enter a reason (at least 3 characters)")
+        return v
+
+
 class CustomerOut(BaseModel):
     id: uuid.UUID
     branch_id: uuid.UUID
@@ -75,6 +89,10 @@ class CustomerOut(BaseModel):
     outstanding: Money
     last_order_date: date | None = None
     created_at: datetime
+    archived: bool = False
+    archived_at: datetime | None = None
+    archive_reason: str | None = None
+    open_orders: int = 0  # orders not yet delivered or cancelled (they block archiving)
 
 
 class CustomerPage(BaseModel):

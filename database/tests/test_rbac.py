@@ -90,8 +90,8 @@ class TestBranchUserDenied:
             assert conn.execute("update public.suppliers set amount_owed = 0").rowcount == 0
             assert conn.execute("update public.employees set monthly_salary = 0").rowcount == 0
             assert conn.execute("update public.tasks set status = 'Done'").rowcount == 0
-        with as_user(conn, w.main):
-            assert conn.execute("delete from public.tasks").rowcount == 0  # tasks have a DELETE grant; RLS hides the rows
+        with pytest.raises(E.InsufficientPrivilege), as_user(conn, w.main):
+            conn.execute("delete from public.tasks")  # 0023: tasks are archived, never deleted -> no DELETE grant any more
         with pytest.raises(E.InsufficientPrivilege), as_user(conn, w.main):
             conn.execute("delete from public.suppliers")  # no DELETE grant at all
         assert one(conn, "select amount_owed from public.suppliers") == 500

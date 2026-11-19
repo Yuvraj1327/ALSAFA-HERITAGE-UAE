@@ -11,6 +11,38 @@ class BranchOut(BaseModel):
     name: str
     sort_order: int
     is_active: bool
+    deactivated_at: datetime | None = None
+    deactivation_reason: str | None = None
+
+
+class BranchDependency(BaseModel):
+    key: str
+    label: str
+    count: int
+    blocking: bool
+
+
+class BranchDependencies(BaseModel):
+    """What still depends on a branch. `can_deactivate` is true only when no blocking item has a count above zero."""
+
+    branch_id: uuid.UUID
+    is_active: bool
+    can_deactivate: bool
+    items: list[BranchDependency]
+
+
+class BranchReasonIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("Enter a reason (at least 3 characters)")
+        return v
 
 
 class UserOut(BaseModel):

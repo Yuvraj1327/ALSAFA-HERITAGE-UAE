@@ -111,10 +111,12 @@ class AnalyticsRepository(BaseRepository):
     def tasks_by_branch(self, branch: uuid.UUID | None, today: date) -> list[Row]:
         return self._all(
             """select coalesce(b.name, 'All Branches') as branch_name, count(*) as total,
-                      count(*) filter (where k.status = 'To Do') as to_do,
-                      count(*) filter (where k.status = 'In Progress') as in_progress,
+                      count(*) filter (where k.status = 'To Do' and k.archived_at is null) as to_do,
+                      count(*) filter (where k.status = 'In Progress' and k.archived_at is null) as in_progress,
                       count(*) filter (where k.status = 'Done') as done,
-                      count(*) filter (where k.status <> 'Done' and k.due_date < cast(:t as date)) as overdue
+                      count(*) filter (where k.status <> 'Done' and k.archived_at is null
+                                         and k.due_date < cast(:t as date)) as overdue,
+                      count(*) filter (where k.status <> 'Done' and k.archived_at is not null) as archived_open
                  from public.tasks k left join public.branches b on b.id = k.branch_id
                 where (cast(:b as uuid) is null or k.branch_id = cast(:b as uuid))
                 group by 1 order by 1""",

@@ -15,6 +15,7 @@ import { DataTable, type DataTableColumn } from '@/components/common/data-table'
 import { Pagination } from '@/components/common/pagination'
 import { SectionCard } from '@/components/common/section-card'
 import { StatCard } from '@/components/common/stat-card'
+import { StatusBadge } from '@/components/common/status-badge'
 import { FormDatePicker } from '@/components/forms/form-date-picker'
 import { FormInput } from '@/components/forms/form-input'
 import { FormSelect } from '@/components/forms/form-select'
@@ -58,6 +59,7 @@ export function TasksPage() {
   const [branch, setBranch] = useState('all')
   const [status, setStatus] = useState('all')
   const [assignee, setAssignee] = useState('all')
+  const [archived, setArchived] = useState<'active' | 'archived' | 'all'>('active')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [sortKey, setSortKey] = useState('due')
@@ -78,6 +80,7 @@ export function TasksPage() {
         ? { assignee_id: assignee }
         : {}),
     ...(view !== 'all' ? { view: view as NonNullable<TaskFilters['view']> } : {}),
+    ...(archived !== 'active' ? { archived } : {}),
     ...(from ? { due_from: from } : {}),
     ...(to ? { due_to: to } : {}),
   }
@@ -103,12 +106,15 @@ export function TasksPage() {
       key: 't',
       header: 'Title',
       cell: (r) => (
-        <Link
-          to={`/tasks/${r.id}`}
-          className="font-medium text-primary underline-offset-4 hover:underline"
-        >
-          {r.title}
-        </Link>
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <Link
+            to={`/tasks/${r.id}`}
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            {r.title}
+          </Link>
+          {r.archived ? <StatusBadge status="neutral">Archived</StatusBadge> : null}
+        </span>
       ),
     },
     { key: 'b', header: 'Branch', cell: (r) => r.branch_name },
@@ -206,6 +212,16 @@ export function TasksPage() {
             label="Due to"
             value={to}
             onChange={(e) => reset(setTo)(e.target.value)}
+          />
+          <FormSelect
+            label="Show"
+            value={archived}
+            onValueChange={(v) => reset(setArchived)(v as 'active' | 'archived' | 'all')}
+            options={[
+              { value: 'active', label: 'Active tasks' },
+              { value: 'archived', label: 'Archived tasks' },
+              { value: 'all', label: 'Active and archived' },
+            ]}
           />
           <FormSelect
             label="Sort by"

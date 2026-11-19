@@ -348,6 +348,13 @@ try:
     c.execute(M0021.read_text())
     took = time.perf_counter() - t0
     after = snapshot()
+    # later migrations (0022, 0023 ...) must not change a single figure either
+    later = [m for m in MIG if m.name > M0021.name]
+    for m in later:
+        c.execute(m.read_text())
+    after_later = snapshot()
+    print(f"LATER MIGRATIONS {[m.name[:4] for m in later]}: all figures identical to the 0021 result = {after_later == after}")
+    after = after_later
     t_after = timed()
     print("TIMING ms (best of 5)  before -> after:")
     for k in t_after:

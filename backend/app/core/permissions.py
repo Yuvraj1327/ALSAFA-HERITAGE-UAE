@@ -85,7 +85,7 @@ ALL, OWN = Scope.ALL_BRANCHES, Scope.OWN_BRANCH
 PERMISSION_MATRIX: dict[Role, dict[Module, Grant]] = {
     Role.OWNER: {
         Module.DASHBOARD:         _g(ALL, A.READ, A.EXPORT),
-        Module.BRANCH_MANAGEMENT: _g(ALL, A.READ, A.UPDATE, A.MANAGE),            # name / order / active only (D16)
+        Module.BRANCH_MANAGEMENT: _g(ALL, A.READ, A.UPDATE, A.MANAGE),            # MANAGE = activate / deactivate (dependency-checked)
         Module.DAILY_REPORTS:     _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),  # UPDATE = audited void (D4) + Owner edit; EXPORT = PDF
         Module.CASH_BANKS:        _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),  # CREATE = transfer/POS settlement; UPDATE = audited void
         Module.OPENING_BALANCES:  _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
@@ -94,8 +94,8 @@ PERMISSION_MATRIX: dict[Role, dict[Module, Grant]] = {
         Module.EMPLOYEES:         _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
         Module.VISAS_PASSPORTS:   _g(ALL, A.READ, A.UPDATE, A.EXPORT),
         Module.TRADE_LICENSES:    _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
-        Module.RENTALS_CHEQUES:   _g(ALL, A.READ, A.CREATE, A.UPDATE, A.EXPORT),
-        Module.TASKS:             _g(ALL, A.READ, A.CREATE, A.UPDATE, A.DELETE, A.EXPORT),
+        Module.RENTALS_CHEQUES:   _g(ALL, A.READ, A.CREATE, A.UPDATE, A.MANAGE, A.EXPORT),  # MANAGE = terminate an agreement
+        Module.TASKS:             _g(ALL, A.READ, A.CREATE, A.UPDATE, A.MANAGE, A.EXPORT),  # MANAGE = archive / restore (no hard delete)
         Module.REPORTS:           _g(ALL, A.READ, A.EXPORT),
         Module.USER_MANAGEMENT:   _g(ALL, A.READ, A.CREATE, A.UPDATE, A.MANAGE),  # no DELETE: deactivate instead
         Module.SETTINGS:          _g(ALL, A.READ, A.UPDATE, A.MANAGE),

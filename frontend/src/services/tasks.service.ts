@@ -22,6 +22,8 @@ export interface TaskFilters {
   due_from?: string
   due_to?: string
   view?: 'overdue' | 'today' | 'week' | 'upcoming' | 'open' | 'completed'
+  /** active (default) hides archived tasks; archived shows only them; all shows both. */
+  archived?: 'active' | 'archived' | 'all'
   sort: 'due' | 'created' | 'title' | 'status'
   desc: boolean
   page: number
@@ -51,3 +53,9 @@ export const updateTask = async (id: string, body: TaskUpdatePayload) =>
   taskDetailSchema.parse((await apiClient.put<unknown>(`/tasks/${id}`, body)).data)
 export const setTaskStatus = async (id: string, body: { status: TaskStatus; note?: string }) =>
   taskDetailSchema.parse((await apiClient.post<unknown>(`/tasks/${id}/status`, body)).data)
+
+/** Archive / restore (Owner): the task and its history are never deleted; a reason is mandatory. */
+export const archiveTask = async (id: string, reason: string) =>
+  taskDetailSchema.parse((await apiClient.post<unknown>(`/tasks/${id}/archive`, { reason })).data)
+export const restoreTask = async (id: string, reason: string) =>
+  taskDetailSchema.parse((await apiClient.post<unknown>(`/tasks/${id}/restore`, { reason })).data)

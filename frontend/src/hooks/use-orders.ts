@@ -38,6 +38,7 @@ export const usePaymentSummary = (p: { date_from: string; date_to: string; branc
 export const useCustomers = (p: {
   q?: string
   branch_id?: string
+  archived?: 'active' | 'archived' | 'all'
   page: number
   page_size?: number
 }) =>
@@ -156,6 +157,22 @@ export const useUpdateCustomer = (id: string) => {
   const done = useInvalidate()
   return useMutation({
     mutationFn: (body: Record<string, unknown>) => api.updateCustomer(id, body),
+    onSuccess: done,
+    meta: { silent: true },
+  })
+}
+export const useArchiveCustomer = () => {
+  const done = useInvalidate()
+  return useMutation({
+    mutationFn: (v: { id: string; reason: string }) => api.archiveCustomer(v.id, v.reason),
+    onSuccess: done,
+    meta: { silent: true },
+  })
+}
+export const useRestoreCustomer = () => {
+  const done = useInvalidate()
+  return useMutation({
+    mutationFn: (v: { id: string; reason: string }) => api.restoreCustomer(v.id, v.reason),
     onSuccess: done,
     meta: { silent: true },
   })

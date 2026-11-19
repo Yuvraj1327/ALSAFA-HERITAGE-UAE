@@ -20,6 +20,7 @@ from app.schemas.rentals import (
     ScheduleOut,
     ScheduleParams,
     SchedulePreview,
+    TerminateIn,
 )
 from app.services.agreement_service import AgreementService
 from app.services.rental_alert_service import RentalAlertService
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/rentals", tags=["rentals"])
 Read = Annotated[object, Depends(require_permission(Module.RENTALS_CHEQUES, Action.READ))]
 Create = Annotated[object, Depends(require_permission(Module.RENTALS_CHEQUES, Action.CREATE))]
 Update = Annotated[object, Depends(require_permission(Module.RENTALS_CHEQUES, Action.UPDATE))]
+Manage = Annotated[object, Depends(require_permission(Module.RENTALS_CHEQUES, Action.MANAGE))]
 
 AgreementStatusQ = Literal["Active", "Expiring", "Expired", "Scheduled", "Renewed", "Terminated"]
 
@@ -142,3 +144,14 @@ def renew(
     agreement_id: uuid.UUID, body: RenewConfirmIn, session: DbSession, _p: Create
 ) -> AgreementDetail:
     return AgreementService(session).renew(agreement_id, body)
+
+
+@router.post(
+    "/{agreement_id}/terminate",
+    response_model=AgreementDetail,
+    summary="Terminate an active agreement (Owner; date + reason + confirmation; cheques are kept)",
+)
+def terminate(
+    agreement_id: uuid.UUID, body: TerminateIn, session: DbSession, _p: Manage
+) -> AgreementDetail:
+    return AgreementService(session).terminate(agreement_id, body)

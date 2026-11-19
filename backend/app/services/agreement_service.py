@@ -22,6 +22,7 @@ from app.schemas.rentals import (
     ScheduleLine,
     ScheduleOut,
     SchedulePreview,
+    TerminateIn,
 )
 from app.services.rental_core import (
     RentalCore,
@@ -238,6 +239,44 @@ class AgreementService(RentalCore):
                     "notes": body.notes,
                 },
             )
+            self.session.commit()
+
+        self.run(work)
+        return self.detail(id_)
+
+    # ---- termination (Owner) ------------------------------------------------------------------------------------
+    def terminate(self, id_: uuid.UUID, body: TerminateIn) -> AgreementDetail:
+        """Closes an active agreement from `termination_date`. Every linked cheque (pending, cleared, bounced, replaced)
+        and every ledger row stays exactly as it is; only the agreement's status and termination record change."""
+        if not body.confirm:
+            raise UnprocessableError(
+                "Termination must be confirmed",
+                code="confirmation_required",
+                fields={"confirm": ["Confirm the termination"]},
+            )
+
+        def work() -> None:
+            today = dubai_today()
+            row = self._open(id_, today)  # Active only; Renewed / Terminated agreements are closed
+            d = body.termination_date
+            if d > today:
+                raise UnprocessableError(
+                    "The termination date cannot be in the future",
+                    fields={
+                        "termination_date": [f"Choose a date up to today ({today.isoformat()})"]
+                    },
+                )
+            if d < row["start_date"] or d > row["end_date"]:
+                raise UnprocessableError(
+                    "The termination date must fall inside the agreement period",
+                    fields={
+                        "termination_date": [
+                            f"Between {row['start_date'].isoformat()} and {row['end_date'].isoformat()}"
+                        ]
+                    },
+                )
+            self.rent.set_reason(body.reason)
+            self.rent.terminate_agreement(id_, d, body.reason)
             self.session.commit()
 
         self.run(work)

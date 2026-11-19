@@ -1,12 +1,19 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.authz import BranchScope, get_branch_scope
 from app.api.deps import DbSession
 from app.core.permissions import Action, Module
-from app.schemas.orders import CustomerIn, CustomerOut, CustomerPage, CustomerUpdate, OrderPage
+from app.schemas.orders import (
+    CustomerIn,
+    CustomerOut,
+    CustomerPage,
+    CustomerReasonIn,
+    CustomerUpdate,
+    OrderPage,
+)
 from app.services.order_service import OrderService
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -29,10 +36,13 @@ def list_customers(
     scope: Read,
     q: Annotated[str | None, Query(max_length=100)] = None,
     branch_id: uuid.UUID | None = None,
+    archived: Annotated[
+        Literal["active", "archived", "all"], Query(description="active (default), archived or all")
+    ] = "active",
     page: Annotated[int, Query(ge=1, le=100000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> CustomerPage:
-    return OrderService(session).list_customers(scope, branch_id, q, page, page_size)
+    return OrderService(session).list_customers(scope, branch_id, q, page, page_size, archived)
 
 
 @router.get("/{customer_id}", response_model=CustomerOut, summary="One customer")
@@ -60,3 +70,25 @@ def customer_orders(
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> OrderPage:
     return OrderService(session).customer_orders(scope, customer_id, page, page_size)
+
+
+@router.post(
+    "/{customer_id}/archive",
+    response_model=CustomerOut,
+    summary="Archive a customer (reason required; orders and payments are kept)",
+)
+def archive_customer(
+    customer_id: uuid.UUID, body: CustomerReasonIn, session: DbSession, scope: Update
+) -> CustomerOut:
+    return OrderService(session).archive_customer(scope, customer_id, body)
+
+
+@router.post(
+    "/{customer_id}/restore",
+    response_model=CustomerOut,
+    summary="Restore an archived customer (reason required)",
+)
+def restore_customer(
+    customer_id: uuid.UUID, body: CustomerReasonIn, session: DbSession, scope: Update
+) -> CustomerOut:
+    return OrderService(session).restore_customer(scope, customer_id, body)

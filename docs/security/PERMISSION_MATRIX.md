@@ -17,14 +17,14 @@ Actions: **R**ead, **C**reate, **U**pdate, **D**elete, **A**pprove, **E**xport, 
 | Visas & Passports | R, U, E · ALL | – | |
 | Trade Licenses | R, C, U, E · ALL | – | |
 | Rentals & Cheques | R, C, U, E · ALL | – | |
-| Tasks | R, C, U, D, E · ALL | – | only module with delete (schema allows it); branch access pending D11 (Step 11 built no task delete; T5) |
+| Tasks | R, C, U, M, E · ALL | – | **no delete** (0023): M = archive / restore with a reason; history is kept; branch access pending D11 |
 | Alerts (notifications, Step 11) | R, U · ALL | – | Owner reads and acknowledges; no branch grant |
 | Reports (analytics) | R, E · ALL | – | branch user's "own history" = Daily Reports/R |
 | User Management | R, C, U, M · ALL | – | no delete: accounts are deactivated, never removed |
 | Settings | R, U, M · ALL | – | |
 | Audit Log | R · ALL | – | (extra row; the architecture doc lists it Owner-read) |
 
-"–" means no grant (DENY). **APPROVE is held by nobody**: no approval workflow exists in any source document. **DELETE** is held only for Tasks: hard deletes of financial/compliance records are not offered (schema decision D4, audited voids instead).
+"–" means no grant (DENY). **APPROVE is held by nobody**: no approval workflow exists in any source document. **DELETE** is held by nobody since migration 0023 (tasks are archived, not deleted): hard deletes of financial/compliance records are not offered (schema decision D4, audited voids instead).
 
 ## Mapping to the Step 5 brief
 The brief's table is implemented as written, with these interpretations (all default to the safer reading):
@@ -56,3 +56,15 @@ Reports & Analytics (`REPORTS`: read, export) and Activity History (`AUDIT_LOG`:
 
 ## Step 13 note
 New modules `orders`, `customers` and `order_payments`. Owner: orders read/create/update/export/manage(cancel); customers read/create/update; order payments read/create/manage(refund, disabled). Branch User (own branch only): orders read/create/update/export; customers read/create/update; order payments read/create. No role is allowed to delete orders, customers or payments. The Branch User grants are assumption **O1** awaiting client approval. See `docs/orders/STEP13_CUSTOMER_ORDERS.md` section 8.
+
+
+## 0023 — archive / terminate / activate (no hard delete anywhere)
+Nothing in the application can be hard-deleted through the API or by the application database role. See `docs/DELETE_ARCHIVE_POLICY.md`.
+
+| Module | Action | Permission | Owner | Branch User |
+|---|---|---|---|---|
+| Tasks | Archive / Restore (reason required) | `tasks:manage` (the old `tasks:delete` grant, the DELETE privilege and the DELETE policy are removed) | yes | no access (D11) |
+| Rental agreements | Terminate (date, reason, confirmation) | `rentals_cheques:manage` | yes | no access |
+| Customers | Archive / Restore (reason required) | `customers:update`, inside the user's branch scope | all branches | own branch only |
+| Branches | Activate / Deactivate (reason required; dependency-checked) and read the dependency list | `branch_management:manage` | yes | no (read own branch only) |
+| Head office expenses | Void (was labelled "Delete") | `expenses:update` | yes | no access |

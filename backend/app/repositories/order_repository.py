@@ -166,6 +166,7 @@ class OrderRepository(BaseRepository):
     # ---- customers -------------------------------------------------------------------------------------
     CUSTOMER_SELECT = """
 select c.id, c.branch_id, b.name as branch_name, c.name, c.mobile, c.whatsapp, c.address, c.area, c.notes, c.created_at,
+       (c.archived_at is not null) as archived, c.archived_at, c.archive_reason, coalesce(a.open_n, 0) as open_orders,
        coalesce(a.n, 0) as order_count, coalesce(a.billed, 0) as total_billed,
        coalesce(a.owed, 0) as outstanding, a.last_date as last_order_date
   from public.customers c
@@ -174,7 +175,8 @@ select c.id, c.branch_id, b.name as branch_name, c.name, c.mobile, c.whatsapp, c
       select count(*) filter (where o.status <> 'Cancelled') as n,
              coalesce(sum(o.final_payable) filter (where o.status <> 'Cancelled'), 0) as billed,
              coalesce(sum(o.final_payable - o.amount_collected) filter (where o.status <> 'Cancelled'), 0) as owed,
-             max(o.order_date) as last_date
+             max(o.order_date) as last_date,
+             count(*) filter (where o.status not in ('Delivered', 'Cancelled')) as open_n
         from public.orders o where o.customer_id = c.id) a on true"""
 
     def customer(self, id_: uuid.UUID) -> Row | None:
@@ -182,14 +184,23 @@ select c.id, c.branch_id, b.name as branch_name, c.name, c.mobile, c.whatsapp, c
 
     def customer_by_mobile(self, branch_id: uuid.UUID, mobile: str) -> Row | None:
         return self._one(
-            "select id, name from public.customers where branch_id = :b and mobile = :m",
+            "select id, name, (archived_at is not null) as archived from public.customers where branch_id = :b and mobile = :m",
             {"b": branch_id, "m": mobile},
         )
 
     def list_customers(
-        self, branch_id: uuid.UUID | None, q: str | None, limit: int, offset: int
+        self,
+        branch_id: uuid.UUID | None,
+        q: str | None,
+        limit: int,
+        offset: int,
+        archived: str = "active",
     ) -> tuple[list[Row], int]:
         conds: list[str] = []
+        if archived == "active":
+            conds.append("c.archived_at is null")
+        elif archived == "archived":
+            conds.append("c.archived_at is not null")
         p: dict[str, Any] = {"lim": limit, "off": offset}
         if branch_id:
             conds.append("c.branch_id = :b")
@@ -226,6 +237,16 @@ select c.id, c.branch_id, b.name as branch_name, c.name, c.mobile, c.whatsapp, c
             ),
             {**v, "id": id_},
         )
+
+    def set_customer_archived(self, id_: uuid.UUID, reason: str | None) -> None:
+        if reason is None:
+            sql = "update public.customers set archived_at = null, archived_by = null, archive_reason = null where id = :id"
+        else:
+            sql = (
+                "update public.customers set archived_at = now(), archived_by = auth.uid(), archive_reason = :r"
+                " where id = :id"
+            )
+        self.session.execute(text(sql), {"id": id_, "r": reason})
 
     # ---- orders ----------------------------------------------------------------------------------------
     def list_orders(

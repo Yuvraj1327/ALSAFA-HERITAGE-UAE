@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.schemas.finance import AuditEntry, Strict
 
 TaskStatus = Literal["To Do", "In Progress", "Done"]
+ArchiveFilter = Literal["active", "archived", "all"]
 Timing = Literal["completed", "no_due_date", "overdue", "due_today", "upcoming"]
 _MIN, _MAX = date(2000, 1, 1), date(2100, 12, 31)
 
@@ -40,6 +41,20 @@ class TaskUpdate(TaskIn):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class ReasonIn(Strict):
+    """Archive / restore: a reason is mandatory and is stored in the audit history."""
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _r(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("Enter a reason (at least 3 characters)")
+        return v
+
+
 class StatusIn(Strict):
     status: TaskStatus
     note: str | None = Field(default=None, max_length=500)
@@ -64,6 +79,10 @@ class TaskOut(BaseModel):
     updated_by_name: str | None
     completed_at: datetime | None
     completed_by_name: str | None
+    archived: bool = False
+    archived_at: datetime | None = None
+    archive_reason: str | None = None
+    archived_by_name: str | None = None
 
 
 class TaskPage(BaseModel):

@@ -1,14 +1,16 @@
-import { ArrowLeft, CheckCircle2, Pencil } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowLeft, CheckCircle2, Pencil } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Can } from '@/auth/permission-guards'
 import { ErrorState } from '@/components/common/error-state'
 import { LoadingState } from '@/components/common/loading-state'
+import { ReasonDialog } from '@/components/common/reason-dialog'
 import { SectionCard } from '@/components/common/section-card'
+import { StatusBadge } from '@/components/common/status-badge'
 import { PageContainer } from '@/components/layout/page-container'
 import { Button } from '@/components/ui/button'
-import { useSetTaskStatus, useTask } from '@/hooks/use-tasks'
+import { useArchiveTask, useRestoreTask, useSetTaskStatus, useTask } from '@/hooks/use-tasks'
 import { toApiError } from '@/lib/errors'
 import { TASK_STATUSES, type TaskStatus } from '@/schemas/tasks'
 import { formatDate } from '@/utils/format'
@@ -28,6 +30,9 @@ export function TaskDetailPage() {
   const detail = useTask(id)
   const setStatus = useSetTaskStatus()
   const [editing, setEditing] = useState(false)
+  const [archiving, setArchiving] = useState<'archive' | 'restore' | null>(null)
+  const archive = useArchiveTask()
+  const restore = useRestoreTask()
   if (detail.isLoading) return <LoadingState label="Loading task…" />
   if (detail.error || !detail.data)
     return (
@@ -56,6 +61,14 @@ export function TaskDetailPage() {
         : '—',
     ],
     ['Last updated', `${stamp(t.updated_at)} by ${t.updated_by_name ?? 'System'}`],
+    ...(t.archived
+      ? ([
+          [
+            'Archived',
+            `${t.archived_at ? stamp(t.archived_at) : ''} by ${t.archived_by_name ?? '—'}. Reason: ${t.archive_reason ?? '—'}`,
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
   ]
   return (
     <PageContainer
@@ -68,15 +81,28 @@ export function TaskDetailPage() {
               <ArrowLeft aria-hidden /> All tasks
             </Link>
           </Button>
-          <Can module="tasks" action="update">
-            <Button variant="outline" onClick={() => setEditing(true)}>
-              <Pencil aria-hidden /> Edit
-            </Button>
-            {t.status !== 'Done' ? (
-              <Button onClick={() => void change('Done')} disabled={setStatus.isPending}>
-                <CheckCircle2 aria-hidden /> Mark completed
+          {t.archived ? null : (
+            <Can module="tasks" action="update">
+              <Button variant="outline" onClick={() => setEditing(true)}>
+                <Pencil aria-hidden /> Edit
               </Button>
-            ) : null}
+              {t.status !== 'Done' ? (
+                <Button onClick={() => void change('Done')} disabled={setStatus.isPending}>
+                  <CheckCircle2 aria-hidden /> Mark completed
+                </Button>
+              ) : null}
+            </Can>
+          )}
+          <Can module="tasks" action="manage">
+            {t.archived ? (
+              <Button variant="outline" onClick={() => setArchiving('restore')}>
+                <ArchiveRestore aria-hidden /> Restore task
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => setArchiving('archive')}>
+                <Archive aria-hidden /> Archive task
+              </Button>
+            )}
           </Can>
         </div>
       }
@@ -85,6 +111,7 @@ export function TaskDetailPage() {
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <TaskStatusBadge status={t.status} />
           <TimingBadge task={t} />
+          {t.archived ? <StatusBadge status="neutral">Archived</StatusBadge> : null}
         </div>
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           {rows.map(([k, v]) => (
@@ -99,7 +126,12 @@ export function TaskDetailPage() {
           <p className="mt-3 text-sm whitespace-pre-wrap text-muted-foreground">Notes: {t.notes}</p>
         ) : null}
         <Can module="tasks" action="update">
-          <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Change status">
+          <div
+            className="mt-4 flex flex-wrap gap-2"
+            role="group"
+            aria-label="Change status"
+            hidden={t.archived}
+          >
             {TASK_STATUSES.map((s) => (
               <Button
                 key={s}
@@ -119,6 +151,28 @@ export function TaskDetailPage() {
         <TaskHistory entries={detail.data.history} />
       </SectionCard>
       <TaskDialog open={editing} onOpenChange={setEditing} task={t} />
+      <ReasonDialog
+        open={archiving !== null}
+        onOpenChange={(o) => !o && setArchiving(null)}
+        title={archiving === 'restore' ? 'Restore this task?' : 'Archive this task?'}
+        confirmLabel={archiving === 'restore' ? 'Restore task' : 'Archive task'}
+        destructive={archiving !== 'restore'}
+        isLoading={archive.isPending || restore.isPending}
+        description={
+          archiving === 'restore'
+            ? 'The task becomes active again and appears in the task list, alerts and dashboard counts.'
+            : 'The task is hidden from the active list, alerts and overdue counts. Nothing is deleted: its history stays, it remains in reports, and you can restore it at any time.'
+        }
+        onSubmit={async (reason) => {
+          if (archiving === 'restore') {
+            await restore.mutateAsync({ id, reason })
+            toast.success('Task restored')
+          } else {
+            await archive.mutateAsync({ id, reason })
+            toast.success('Task archived')
+          }
+        }}
+      />
     </PageContainer>
   )
 }

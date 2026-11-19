@@ -26,6 +26,10 @@ export const taskSchema = z.object({
   updated_by_name: z.string().nullable(),
   completed_at: z.string().nullable(),
   completed_by_name: z.string().nullable(),
+  archived: z.boolean().default(false),
+  archived_at: z.string().nullable().default(null),
+  archive_reason: z.string().nullable().default(null),
+  archived_by_name: z.string().nullable().default(null),
 })
 export type Task = z.infer<typeof taskSchema>
 

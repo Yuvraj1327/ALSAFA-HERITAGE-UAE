@@ -306,6 +306,10 @@ class AgreementOut(BaseModel):
     updated_at: datetime
     created_by_name: str | None
     updated_by_name: str | None
+    terminated_on: date | None = None
+    terminated_at: datetime | None = None
+    termination_reason: str | None = None
+    terminated_by_name: str | None = None
 
 
 class AgreementPage(BaseModel):
@@ -335,6 +339,22 @@ class RenewalLink(BaseModel):
     annual_rent: Money
     cheque_count: int | None
     status: AgreementStatusT
+
+
+class TerminateIn(Strict):
+    """Terminate an active agreement: effective date + reason. Cheques are not changed."""
+
+    termination_date: date
+    reason: str = Field(min_length=3, max_length=500)
+    confirm: bool = False  # the Owner must explicitly confirm; the UI asks before sending
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("Enter a reason (at least 3 characters)")
+        return v
 
 
 class AgreementDetail(BaseModel):

@@ -36,3 +36,7 @@ export const useSetTaskStatus = () =>
   useTaskMutation((v: { id: string; status: 'To Do' | 'In Progress' | 'Done'; note?: string }) =>
     api.setTaskStatus(v.id, { status: v.status, ...(v.note ? { note: v.note } : {}) }),
   )
+export const useArchiveTask = () =>
+  useTaskMutation((v: { id: string; reason: string }) => api.archiveTask(v.id, v.reason))
+export const useRestoreTask = () =>
+  useTaskMutation((v: { id: string; reason: string }) => api.restoreTask(v.id, v.reason))

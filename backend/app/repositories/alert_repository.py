@@ -40,7 +40,7 @@ class AlertRepository(BaseRepository):
                            else 'task_due_7' end as kind
                  from public.tasks t left join public.branches b on b.id = t.branch_id
                  left join public.profiles a on a.user_id = t.assignee_user_id
-                where t.status <> 'Done' and t.due_date is not null and t.due_date <= cast(:t as date) + 7""",
+                where t.status <> 'Done' and t.archived_at is null and t.due_date is not null and t.due_date <= cast(:t as date) + 7""",
             {"t": today},
         )
 

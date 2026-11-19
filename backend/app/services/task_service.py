@@ -14,6 +14,7 @@ from app.core.exceptions import ConflictError, NotFoundError, UnprocessableError
 from app.repositories.task_repository import TaskRepository
 from app.schemas.tasks import (
     Assignee,
+    ReasonIn,
     StatusIn,
     TaskDetail,
     TaskIn,
@@ -65,6 +66,13 @@ class TaskService(BaseService):
             raise NotFoundError("Task not found")
         return row
 
+    @staticmethod
+    def _writable(row: dict[str, Any]) -> None:
+        if row["archived"]:
+            raise ConflictError(
+                "This task is archived. Restore it before changing it.", code="task_archived"
+            )
+
     def _check_refs(self, branch_id: uuid.UUID | None, assignee_id: uuid.UUID | None) -> None:
         if branch_id is not None:
             b = self.repo.branch(branch_id)
@@ -103,6 +111,7 @@ class TaskService(BaseService):
         desc: bool,
         page: int,
         page_size: int,
+        archived: str = "active",
     ) -> TaskPage:
         if due_from and due_to and due_from > due_to:
             raise UnprocessableError(
@@ -112,7 +121,7 @@ class TaskService(BaseService):
         today = dubai_today()
         rows, total = self.repo.search(
             today, q, branch_id, all_branches, status, assignee_id, unassigned,
-            due_from, due_to, view, sort, desc, page, page_size,
+            due_from, due_to, view, sort, desc, page, page_size, archived,
         )  # fmt: skip
         return TaskPage(
             items=[self._out(r, today) for r in rows], total=total, page=page, page_size=page_size
@@ -138,6 +147,7 @@ class TaskService(BaseService):
     def update(self, id_: uuid.UUID, body: TaskUpdate) -> TaskDetail:
         def work() -> None:
             row = self._load(id_, for_update=True)
+            self._writable(row)
             self._check_refs(
                 body.branch_id if body.branch_id != row["branch_id"] else None,
                 body.assignee_id if body.assignee_id != row["assignee_id"] else None,
@@ -153,10 +163,36 @@ class TaskService(BaseService):
     def set_status(self, id_: uuid.UUID, body: StatusIn) -> TaskDetail:
         def work() -> None:
             row = self._load(id_, for_update=True)
+            self._writable(row)
             if row["status"] == body.status:
                 raise ConflictError(f"The task is already {body.status}", code="status_unchanged")
             self.repo.set_reason(body.note)
             self.repo.set_status(id_, body.status)
+            self.session.commit()
+
+        self.run(work)
+        return self.detail(id_)
+
+    # ---- archive / restore (Owner; the task and its history are never deleted) ---------------------------------
+    def archive(self, id_: uuid.UUID, body: ReasonIn) -> TaskDetail:
+        def work() -> None:
+            row = self._load(id_, for_update=True)
+            if row["archived"]:
+                raise ConflictError("This task is already archived", code="already_archived")
+            self.repo.set_reason(body.reason)
+            self.repo.archive(id_, body.reason)
+            self.session.commit()
+
+        self.run(work)
+        return self.detail(id_)
+
+    def restore(self, id_: uuid.UUID, body: ReasonIn) -> TaskDetail:
+        def work() -> None:
+            row = self._load(id_, for_update=True)
+            if not row["archived"]:
+                raise ConflictError("This task is not archived", code="not_archived")
+            self.repo.set_reason(body.reason)
+            self.repo.restore(id_)
             self.session.commit()
 
         self.run(work)

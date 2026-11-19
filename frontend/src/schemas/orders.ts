@@ -66,6 +66,10 @@ export const customerSchema = z.object({
   outstanding: money,
   last_order_date: z.string().nullable(),
   created_at: z.string(),
+  archived: z.boolean().default(false),
+  archived_at: z.string().nullable().default(null),
+  archive_reason: z.string().nullable().default(null),
+  open_orders: z.number().default(0),
 })
 export type Customer = z.infer<typeof customerSchema>
 

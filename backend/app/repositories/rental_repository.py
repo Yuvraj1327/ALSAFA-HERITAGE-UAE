@@ -20,11 +20,12 @@ AGREEMENT_SELECT = f"""
 select a.*, b.name as branch_name, {AGREEMENT_STATUS} as display_status,
        (select n.id from public.rental_agreements n where n.renewed_from_id = a.id) as renewed_to_id,
        s.live_cheques, s.schedule_total, s.pending_count, s.cleared_count, s.bounced_count, s.next_cheque_date,
-       pc.full_name as created_by_name, pu.full_name as updated_by_name
+       pc.full_name as created_by_name, pu.full_name as updated_by_name, pt.full_name as terminated_by_name
   from public.rental_agreements a
   join public.branches b on b.id = a.branch_id
   left join public.profiles pc on pc.user_id = a.created_by
   left join public.profiles pu on pu.user_id = a.updated_by
+  left join public.profiles pt on pt.user_id = a.terminated_by
   cross join lateral (
     select count(*) filter (where not x.sup) as live_cheques,
            coalesce(sum(x.amount) filter (where not x.sup), 0) as schedule_total,
@@ -189,6 +190,16 @@ from public.rental_agreements a""",
         self.session.execute(
             text("update public.rental_agreements set status = :s where id = :id"),
             {"s": status, "id": id_},
+        )
+
+    def terminate_agreement(self, id_: uuid.UUID, on: date, reason: str) -> None:
+        """Closes the agreement only. Its cheques (pending, cleared, bounced, replaced) are left exactly as they are."""
+        self.session.execute(
+            text(
+                """update public.rental_agreements set status = 'Terminated', terminated_on = :on, terminated_at = now(),
+                          terminated_by = auth.uid(), termination_reason = :r where id = :id and status = 'Active'"""
+            ),
+            {"on": on, "r": reason, "id": id_},
         )
 
     def renewal_chain(self, id_: uuid.UUID) -> list[Row]:
@@ -371,17 +382,19 @@ union all
 select 'cheque_overdue', c.id, c.agreement_id, b.name, a.landlord, c.cheque_no, c.amount, c.bank, c.cheque_date
   from public.pdc_cheques c join public.rental_agreements a on a.id = c.agreement_id
   join public.branches b on b.id = a.branch_id
- where c.status = 'Pending' and c.cheque_date < cast(:t as date)
+ where c.status = 'Pending' and c.cheque_date < cast(:t as date) and a.status <> 'Terminated'
 union all
 select 'cheque_due_7', c.id, c.agreement_id, b.name, a.landlord, c.cheque_no, c.amount, c.bank, c.cheque_date
   from public.pdc_cheques c join public.rental_agreements a on a.id = c.agreement_id
   join public.branches b on b.id = a.branch_id
  where c.status = 'Pending' and c.cheque_date between cast(:t as date) and cast(:t as date) + 7
+   and a.status <> 'Terminated'
 union all
 select 'cheque_due_30', c.id, c.agreement_id, b.name, a.landlord, c.cheque_no, c.amount, c.bank, c.cheque_date
   from public.pdc_cheques c join public.rental_agreements a on a.id = c.agreement_id
   join public.branches b on b.id = a.branch_id
  where c.status = 'Pending' and c.cheque_date between cast(:t as date) + 8 and cast(:t as date) + 30
+   and a.status <> 'Terminated'
 union all
 select 'cheque_bounced', c.id, c.agreement_id, b.name, a.landlord, c.cheque_no, c.amount, c.bank, c.bounced_on
   from public.pdc_cheques c join public.rental_agreements a on a.id = c.agreement_id

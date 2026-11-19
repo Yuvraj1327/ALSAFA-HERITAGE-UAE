@@ -79,3 +79,10 @@ Write test (creates production data — only if the Owner explicitly agrees; oth
 * Watch Railway logs for `unmapped database error`, 5xx and `negative_balance` for the first days.
 * Branch users: "refresh the page before submitting today's report" (a stale tab sends the old payload and gets a clear 422).
 * Historical reports show their old expenses as **Other (Legacy)**; if the Owner edits one, its legacy rows become **Other** (audited).
+
+
+## Addendum — migration 0023 (archive / terminate / activate)
+Apply `0023_archive_terminate_activate.sql` after `0022`, as one script, **before** deploying the backend that serves the new endpoints; then deploy the backend, then the frontend.
+Old frontend + new backend and old backend + new database are both safe (additive columns; no existing endpoint changed shape).
+Smoke test (read-only): Tasks list loads and shows the *Show* filter; a rental agreement page shows *Terminate* only to the Owner; Customers shows the *Show* filter; Branches shows *Deactivate*/*Activate* to the Owner.
+Do **not** try these on production without the Owner's agreement: each one writes an audited record (archive/restore are reversible; terminate and deactivate are audited; terminate is final).

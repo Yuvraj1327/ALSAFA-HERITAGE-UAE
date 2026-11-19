@@ -62,3 +62,14 @@ Found in the pre-production review of 0021: the Owner could not correct a daily 
 no table or row changes. A deactivated supplier is accepted on rows of the *same* report that already used it, and still refused on new reports and new rows.
 Apply it as one script after 0021 and **before** deploying the matching backend (the old backend works with it). Running it twice is harmless.
 Matching backend change: dashboard and analytics "Supplier Outstanding" now sums **all** suppliers (same figure as the Suppliers page) instead of only active ones.
+
+
+## 0023 — archive / terminate / activate (apply after 0022, before deploying the matching backend)
+Additive; no row is deleted or rewritten. One script, one transaction (a failure rolls everything back; running it twice fails on the first existing column and changes nothing).
+* **tasks**: `archived_at/by`, `archive_reason`; DELETE privilege and `tasks_delete_owner` policy removed (no hard delete for anyone); archived tasks are read-only until restored;
+  `app.tasks_before()` skips the "assignee must be active" rule only for the archive / restore step itself.
+* **rental_agreements**: `terminated_on/at/by`, `termination_reason`; termination is final (trigger); cheques are never touched.
+* **customers**: `archived_at/by`, `archive_reason`; archived customers are read-only; no NEW order for an archived customer (trigger); orders and payments untouched.
+* **branches**: `deactivated_at/by`, `deactivation_reason`; `public.branch_dependencies()` and `public.set_branch_active()` (SECURITY DEFINER, pinned search_path, Owner only, dependency re-check under a row lock).
+Verification: `database/verification/0021_balance_snapshot.sql` before and after must stay identical (this migration touches no money table); `database/verification/rehearse_0021.py` proves it on a large synthetic database.
+Deployment order: **0023 first** (the previous backend keeps working: it only loses the task DELETE it never exposed), then the backend, then the frontend. Rollback after use: forward-fix only (new columns hold history).

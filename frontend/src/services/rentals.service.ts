@@ -100,6 +100,10 @@ export const previewRenewal = (id: string, b: RenewPayload) =>
 export const renewAgreement = (id: string, b: RenewPayload & { expected_end_date: string }) =>
   send('post', `/rentals/${id}/renew`, agreementDetailSchema, { ...b, confirm: true })
 
+/** Owner only. Cheques are not changed by a termination; the server needs the explicit confirmation. */
+export const terminateAgreement = (id: string, b: { termination_date: string; reason: string }) =>
+  send('post', `/rentals/${id}/terminate`, agreementDetailSchema, { ...b, confirm: true })
+
 /* ---------- cheques ---------- */
 export interface ChequeFilters {
   q?: string

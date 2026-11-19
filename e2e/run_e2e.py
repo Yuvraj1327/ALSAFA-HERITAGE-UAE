@@ -214,7 +214,7 @@ def main() -> int:
                 )
 
         only = os.environ.get("E2E_ONLY", "")
-        only12 = only in ("12", "13", "itemised")
+        only12 = only in ("12", "13", "itemised", "archive")
         if not only12:
             run_api_scenarios(users, dsn, b1, b2)
         with sync_playwright() as pw:
@@ -229,12 +229,14 @@ def main() -> int:
                 run_step9_scenarios(browser, users, dsn, b1, b2)
                 run_step10_scenarios(browser, users, dsn, b1, b2)
                 run_step11_scenarios(browser, users, dsn, b1, b2)
-            if only not in ("13", "itemised"):
+            if only not in ("13", "itemised", "archive"):
                 run_step12_scenarios(browser, users, dsn, b1, b2)
-            if only != "itemised":
+            if only not in ("itemised", "archive"):
                 run_step13_scenarios(browser, users, dsn, b1, b2)
             if only in ("", "itemised"):
                 run_itemised_scenarios(browser, users, dsn, b1, b2)
+            if only in ("", "archive"):
+                run_archive_scenarios(browser, users, dsn, b1, b2)
             browser.close()
         if not only12:
             run_provisioning_scenarios(dsn, b2)
@@ -3978,6 +3980,290 @@ def run_itemised_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b
             assert status == 200, (name, status, body)
             (dst / f"{name}.json").write_text(json.dumps(body))
         (dst / "post_response.json").write_text(json.dumps(state["report"]))
+
+    _()
+
+
+def run_archive_scenarios(browser: Browser, users: dict, dsn: str, b1: tuple, b2: tuple) -> None:
+    """Migration 0023 - Tasks archive/restore, Rental terminate, Customers archive/restore, Branch activate/deactivate and the
+    "Void expense" wording, driven through the REAL UI against the REAL API and database. Works on its own rows."""
+    from datetime import datetime, timedelta
+    from decimal import Decimal as Dc
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("Asia/Dubai")).date()
+    A = f"{API}/api/v1"
+    tok = {k: {"Authorization": "Bearer " + sign_in_token(users[k]["email"], users[k]["password"])} for k in ("owner", "branch")}
+
+    def get(path: str, who: str = "owner", **params) -> tuple[int, dict | list]:
+        q = ("?" + "&".join(f"{k}={v}" for k, v in params.items())) if params else ""
+        return http("GET", f"{A}{path}{q}", headers=tok[who])  # type: ignore[return-value]
+
+    def post(path: str, body: dict, who: str = "owner") -> tuple[int, dict]:
+        return http("POST", f"{A}{path}", body, tok[who])
+
+    with psycopg.connect(dsn, autocommit=True) as c:
+        if c.execute("select count(*) from public.opening_balances").fetchone()[0] == 0:
+            c.execute("insert into public.opening_balances (as_of_date, receipts_bank, enbd_balance, adcb_balance) values (%s,'ENBD',5000,5000)", (today - timedelta(days=90),))
+        as_of = c.execute("select as_of_date from public.opening_balances").fetchone()[0]
+    mark = uuid.uuid4().hex[:6]
+
+    def open_page(role: str):
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        page = ctx.new_page()
+        page.set_default_timeout(15000)
+        problems: list[str] = []
+        page.on("console", lambda m: problems.append(f"console.{m.type}: {m.text}") if m.type in ("error", "warning") else None)
+        page.on("pageerror", lambda e: problems.append(f"pageerror: {e}"))
+        login_ui(page, users[role]["email"], users[role]["password"])
+        expect(page.get_by_role("heading", name="Dashboard", level=1)).to_be_visible()
+        return ctx, page, problems
+
+    def reason_and_confirm(page: Page, dialog_role: str, confirm_label: str, reason: str) -> None:
+        dlg = page.get_by_role(dialog_role)
+        dlg.get_by_role("textbox", name=re.compile("Reason")).fill(reason)
+        dlg.get_by_role("button", name=confirm_label, exact=True).click()
+
+    # ------------------------------------------------------------------------------------------ 1. tasks
+    @scenario("ARCHIVE UI: Owner archives a task with a reason, it leaves the live list and alerts, shows under Archived, and is restored")
+    def _() -> None:
+        title = f"E2E task {mark}"
+        st, t = post("/tasks", {"title": title, "branch_id": str(b1[0]), "due_date": (today - timedelta(days=3)).isoformat()})
+        assert st == 201, t
+        tid = t["task"]["id"]
+        overdue_before = get("/tasks/summary")[1]["overdue"]  # type: ignore[index]
+        ctx, page, problems = open_page("owner")
+        page.goto(f"{WEB}/tasks/{tid}")
+        expect(page.get_by_role("button", name="Edit", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name=re.compile("Delete", re.I))).to_have_count(0)  # no hard delete anywhere
+        page.get_by_role("button", name=re.compile("Archive task")).click()
+        page.get_by_role("alertdialog").get_by_role("button", name="Archive task", exact=True).click()
+        expect(page.get_by_role("alertdialog").get_by_role("alert")).to_be_visible()  # reason is mandatory
+        with page.expect_response(lambda r: r.url.endswith(f"/tasks/{tid}/archive") and r.request.method == "POST") as resp:
+            reason_and_confirm(page, "alertdialog", "Archive task", "No longer needed (e2e)")
+        assert resp.value.status == 200, resp.value.text()
+        expect(page.get_by_text(re.compile("Reason: No longer needed")).first).to_be_visible()
+        expect(page.get_by_role("button", name="Edit", exact=True)).to_have_count(0)  # archived = read only
+        assert get("/tasks/summary")[1]["overdue"] == overdue_before - 1  # type: ignore[index]
+        page.goto(f"{WEB}/tasks")
+        page.get_by_label("Search").fill(title)
+        expect(page.get_by_text("No tasks found")).to_be_visible()  # hidden from the live list
+        page.get_by_role("combobox", name="Show").click()
+        page.get_by_role("option", name="Archived tasks", exact=True).click()
+        expect(page.get_by_role("link", name=title)).to_be_visible()
+        expect(page.get_by_text("Archived", exact=True).first).to_be_visible()
+        page.goto(f"{WEB}/tasks/{tid}")
+        page.get_by_role("button", name=re.compile("Restore task")).click()
+        with page.expect_response(lambda r: r.url.endswith(f"/tasks/{tid}/restore") and r.request.method == "POST") as resp:
+            reason_and_confirm(page, "alertdialog", "Restore task", "Needed again (e2e)")
+        assert resp.value.status == 200
+        assert get("/tasks/summary")[1]["overdue"] == overdue_before  # type: ignore[index]
+        with psycopg.connect(dsn, autocommit=True) as c:
+            reasons = [r[0] for r in c.execute("select reason from public.audit_log where table_name='tasks' and record_id=%s and action='UPDATE' order by id", (tid,))]
+        assert "No longer needed (e2e)" in reasons and "Needed again (e2e)" in reasons, reasons
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    # ------------------------------------------------------------------------------------------ 2. rentals
+    @scenario("ARCHIVE UI: Owner terminates a rental agreement (date + reason + confirmation); every cheque and balance stays exactly as it was")
+    def _() -> None:
+        start = max(today - timedelta(days=30), as_of + timedelta(days=1))
+        st, d = post("/rentals", {
+            "branch_id": str(b1[0]), "landlord": f"E2E Landlord {mark}", "unit": "U1", "start_date": start.isoformat(),
+            "annual_rent": "12000.00", "bank": "ENBD", "cheque_count": 4, "first_cheque_date": start.isoformat(),
+            "first_cheque_no": f"9{uuid.uuid4().int % 10**5:05d}",
+        })  # fmt: skip
+        assert st == 201, d
+        aid = d["agreement"]["id"]
+        with psycopg.connect(dsn, autocommit=True) as c:
+            cheques_before = c.execute("select id, status, amount, cheque_date from public.pdc_cheques where agreement_id=%s order by cheque_no", (aid,)).fetchall()
+        assert len(cheques_before) == 4
+        s0 = get("/cash-banks/summary")[1]
+        ctx, page, problems = open_page("owner")
+        page.goto(f"{WEB}/rentals/{aid}")
+        page.get_by_role("button", name="Terminate").click()
+        dlg = page.get_by_role("dialog", name="Terminate this agreement?")
+        expect(dlg).to_contain_text("Nothing is deleted")
+        expect(dlg).to_contain_text("4 linked cheques")
+        dlg.get_by_role("textbox", name=re.compile("Reason")).fill("Landlord agreed to end the lease (e2e)")
+        dlg.get_by_role("button", name="Terminate agreement").click()
+        expect(dlg.get_by_role("alert")).to_contain_text("confirmation")  # not sent without the checkbox
+        assert get(f"/rentals/{aid}")[1]["agreement"]["stored_status"] == "Active"  # type: ignore[index]
+        dlg.get_by_role("checkbox").check()
+        with page.expect_response(lambda r: r.url.endswith(f"/rentals/{aid}/terminate") and r.request.method == "POST") as resp:
+            dlg.get_by_role("button", name="Terminate agreement").click()
+        assert resp.value.status == 200, resp.value.text()
+        expect(page.get_by_text(re.compile("Terminated on"))).to_be_visible()
+        expect(page.get_by_role("button", name="Terminate")).to_be_disabled()
+        expect(page.get_by_role("button", name="Edit", exact=True).first).to_be_disabled()  # the agreement header button
+        with psycopg.connect(dsn, autocommit=True) as c:
+            assert c.execute("select id, status, amount, cheque_date from public.pdc_cheques where agreement_id=%s order by cheque_no", (aid,)).fetchall() == cheques_before
+            row = c.execute("select status, terminated_on, termination_reason from public.rental_agreements where id=%s", (aid,)).fetchone()
+        assert row[0] == "Terminated" and row[2] == "Landlord agreed to end the lease (e2e)", row
+        assert get("/cash-banks/summary")[1] == s0  # no balance moved
+        # it is final: the API refuses a second termination, the DB refuses to reopen
+        assert post(f"/rentals/{aid}/terminate", {"termination_date": today.isoformat(), "reason": "again again", "confirm": True})[0] == 409
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    # ------------------------------------------------------------------------------------------ 3. customers
+    @scenario("ARCHIVE UI: Branch User archives and restores a customer of their own branch; orders are kept; other branches are untouchable")
+    def _() -> None:
+        n = uuid.uuid4().int % 10**8
+        st, cust = post("/customers", {"name": f"E2E Customer {mark}", "mobile": f"05{n:08d}"}, "branch")
+        assert st == 201, cust
+        cid = cust["id"]
+        _, cats = get("/orders/service-categories")
+        cat = cats[0]["id"]  # type: ignore[index]
+        order_body = {
+            "customer_id": cid, "category_id": cat, "service_type": "Standard",
+            "delivery_date": (today + timedelta(days=2)).isoformat(), "delivery_time": "18:00",
+            "pickup_address": "Villa 4", "delivery_address": "Villa 4", "order_total": "100.00", "discount": "0", "service_fee": "0",
+        }  # fmt: skip
+        st, o = post("/orders", order_body, "branch")
+        assert st == 201, o
+        oid = o["order"]["id"]
+        ctx, page, problems = open_page("branch")
+        page.goto(f"{WEB}/customers/{cid}")
+        page.get_by_role("button", name=re.compile("Archive customer")).click()
+        reason_and_confirm(page, "alertdialog", "Archive customer", "Duplicate account (e2e)")
+        expect(page.get_by_role("alertdialog").get_by_text(re.compile("open order"))).to_be_visible()  # open order blocks it
+        page.keyboard.press("Escape")
+        assert get(f"/customers/{cid}", "branch")[1]["archived"] is False  # type: ignore[index]
+        # the owner cancels the order, then archiving works
+        assert post(f"/orders/{oid}/cancel", {"reason": "Customer cancelled (e2e)", "confirm": True})[0] == 200
+        page.reload()
+        page.get_by_role("button", name=re.compile("Archive customer")).click()
+        with page.expect_response(lambda r: r.url.endswith(f"/customers/{cid}/archive") and r.request.method == "POST") as resp:
+            reason_and_confirm(page, "alertdialog", "Archive customer", "Duplicate account (e2e)")
+        assert resp.value.status == 200, resp.value.text()
+        expect(page.get_by_role("note")).to_contain_text("Duplicate account (e2e)")
+        expect(page.get_by_role("heading", name="Order history")).to_be_visible()  # the history is still there
+        assert get(f"/customers/{cid}/orders", "branch")[1]["total"] == 1  # type: ignore[index]
+        # hidden from the default list, visible under Archived
+        page.goto(f"{WEB}/customers")
+        page.get_by_label("Search customers").fill(f"E2E Customer {mark}")
+        expect(page.get_by_text("No customers found")).to_be_visible()
+        page.get_by_role("combobox", name="Show").click()
+        page.get_by_role("option", name="Archived customers", exact=True).click()
+        expect(page.get_by_role("link", name=f"E2E Customer {mark}")).to_be_visible()
+        # no new order for an archived customer
+        st, e = post("/orders", order_body, "branch")
+        assert st == 409 and e["error"]["code"] == "customer_archived", (st, e)
+        # restore through the UI
+        page.goto(f"{WEB}/customers/{cid}")
+        page.get_by_role("button", name=re.compile("Restore customer")).click()
+        with page.expect_response(lambda r: r.url.endswith(f"/customers/{cid}/restore") and r.request.method == "POST") as resp:
+            reason_and_confirm(page, "alertdialog", "Restore customer", "Came back (e2e)")
+        assert resp.value.status == 200
+        assert post("/orders", order_body, "branch")[0] == 201  # usable again
+        # branch isolation: another branch's customer cannot be archived by this Branch User
+        st, other = post("/customers", {"name": f"E2E Other {mark}", "mobile": f"05{(n + 7) % 10**8:08d}", "branch_id": str(b2[0])})
+        assert st == 201, other
+        assert post(f"/customers/{other['id']}/archive", {"reason": "not mine (e2e)"}, "branch")[0] in (403, 404)
+        assert not [p for p in problems if "409" not in p], problems  # the open-order refusal is an expected 409
+        ctx.close()
+
+    _()
+
+    # ------------------------------------------------------------------------------------------ 4. branches
+    @scenario("ARCHIVE UI: Owner sees what blocks a branch deactivation, deactivates a clean branch with a reason, and reactivates it")
+    def _() -> None:
+        with psycopg.connect(dsn, autocommit=True) as c:
+            clean = c.execute("insert into public.branches (name, sort_order) values (%s, 990) returning id", (f"E2E Closing {mark}",)).fetchone()[0]
+        try:
+            ctx, page, problems = open_page("owner")
+            page.goto(f"{WEB}/branches")
+            # b1 has the E2E Branch User -> blocked
+            page.get_by_role("button", name=f"Deactivate branch {b1[1]}").click()
+            dlg = page.get_by_role("dialog")
+            expect(dlg).to_contain_text("cannot be deactivated yet")
+            expect(dlg).to_contain_text("Active Branch Users assigned to this branch")
+            expect(dlg.get_by_role("button", name="Deactivate branch")).to_be_disabled()
+            dlg.get_by_role("button", name="Cancel").click()
+            assert get(f"/branches/{b1[0]}")[1]["is_active"] is True  # type: ignore[index]
+            # the clean branch deactivates
+            page.get_by_role("button", name=f"Deactivate branch E2E Closing {mark}").click()
+            dlg = page.get_by_role("dialog")
+            expect(dlg).to_contain_text("Nothing depends on this branch")
+            dlg.get_by_role("button", name="Deactivate branch").click()
+            expect(dlg.get_by_role("alert")).to_contain_text("reason")
+            dlg.get_by_role("textbox", name=re.compile("Reason")).fill("Shop closed for good (e2e)")
+            with page.expect_response(lambda r: r.url.endswith(f"/branches/{clean}/deactivate") and r.request.method == "POST") as resp:
+                dlg.get_by_role("button", name="Deactivate branch").click()
+            assert resp.value.status == 200, resp.value.text()
+            row = page.get_by_role("row", name=re.compile(f"E2E Closing {mark}"))
+            expect(row).to_contain_text("Inactive")
+            expect(row).to_contain_text("Shop closed for good (e2e)")
+            # an inactive branch takes no new work
+            st, e = post("/daily-reports", {"report_date": today.isoformat(), "branch_id": str(clean), "total_sales": "10", "expenses": []})
+            assert st == 422, (st, e)
+            # reactivate
+            page.get_by_role("button", name=f"Activate branch E2E Closing {mark}").click()
+            with page.expect_response(lambda r: r.url.endswith(f"/branches/{clean}/activate") and r.request.method == "POST") as resp:
+                reason_and_confirm(page, "dialog", "Activate branch", "Reopened (e2e)")
+            assert resp.value.status == 200
+            expect(page.get_by_role("row", name=re.compile(f"E2E Closing {mark}"))).to_contain_text("Active")
+            with psycopg.connect(dsn, autocommit=True) as c:
+                reasons = [r[0] for r in c.execute("select reason from public.audit_log where table_name='branches' and record_id=%s and action='UPDATE' order by id", (str(clean),))]
+            assert reasons[-2:] == ["Shop closed for good (e2e)", "Reopened (e2e)"], reasons
+            # a Branch User cannot see or use any of it
+            assert post(f"/branches/{clean}/deactivate", {"reason": "not allowed (e2e)"}, "branch")[0] == 403
+            assert not problems, problems
+            ctx.close()
+            ctx, page, _p = open_page("branch")
+            page.goto(f"{WEB}/branches")
+            expect(page.get_by_role("button", name=re.compile("Deactivate branch|Activate branch"))).to_have_count(0)
+            ctx.close()
+        finally:
+            with psycopg.connect(dsn, autocommit=True) as c:
+                c.execute("delete from public.branches where id=%s", (clean,))
+
+    _()
+
+    # ------------------------------------------------------------------------------------------ 5. expenses wording
+    @scenario("ARCHIVE UI: the head-office expense action says Void everywhere (button, dialog, message); the record is voided, not deleted")
+    def _() -> None:
+        _, cats = get("/expenses/categories")
+        cur = get("/cash-banks/summary")[1]
+        acct = max(("Cash", "ENBD", "ADCB"), key=lambda a: Dc(cur[{"Cash": "cash_in_hand", "ENBD": "enbd", "ADCB": "adcb"}[a]]))  # type: ignore[index]
+        assert Dc(cur[{"Cash": "cash_in_hand", "ENBD": "enbd", "ADCB": "adcb"}[acct]]) >= 5, cur  # type: ignore[index]
+        st, e = post("/expenses", {"category_id": cats[0]["id"], "amount": "3.00", "paid_from": acct, "note": f"e2e void {mark}"})  # type: ignore[index]
+        assert st == 201, e
+        eid = e["id"]
+        ctx, page, problems = open_page("owner")
+        page.goto(f"{WEB}/expenses")
+        btn = page.get_by_role("button", name=re.compile(rf"^Void expense .* {today.isoformat()}$")).first
+        expect(btn).to_have_text(re.compile("Void"))
+        expect(page.get_by_role("button", name=re.compile("Delete", re.I))).to_have_count(0)
+        expect(page.get_by_text(re.compile(r"\bDelete\b"))).to_have_count(0)
+        btn.click()
+        dlg = page.get_by_role("alertdialog")
+        expect(dlg).to_contain_text("Void this expense?")
+        expect(dlg).not_to_contain_text(re.compile("delete this", re.I))
+        with page.expect_response(lambda r: r.url.endswith(f"/expenses/{eid}/void") or "/void" in r.url) as resp:
+            reason_and_confirm(page, "alertdialog", "Void expense", "Entered twice (e2e)")
+        assert resp.value.status == 204 or resp.value.status == 200, resp.value.status
+        expect(page.get_by_text("Expense voided")).to_be_visible()
+        with psycopg.connect(dsn, autocommit=True) as c:
+            row = c.execute("select voided_at is not null, void_reason from public.head_office_expenses where id=%s", (eid,)).fetchone()
+        assert row == (True, "Entered twice (e2e)"), row  # voided, still in the table
+        assert not problems, problems
+        ctx.close()
+
+    _()
+
+    # ------------------------------------------------------------------------------------------ 6. API: no delete route
+    @scenario("ARCHIVE API: no DELETE endpoint exists in any of the five modules, even for the Owner")
+    def _() -> None:
+        zero = uuid.uuid4()
+        for path in (f"/tasks/{zero}", f"/rentals/{zero}", f"/customers/{zero}", f"/branches/{zero}", f"/expenses/{zero}", f"/daily-reports/{zero}"):
+            st, _b = http("DELETE", f"{A}{path}", headers=tok["owner"])
+            assert st in (404, 405), (path, st)
 
     _()
 

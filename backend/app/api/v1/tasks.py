@@ -8,7 +8,9 @@ from app.api.authz import require_permission
 from app.api.deps import DbSession
 from app.core.permissions import Action, Module
 from app.schemas.tasks import (
+    ArchiveFilter,
     Assignee,
+    ReasonIn,
     StatusIn,
     TaskDetail,
     TaskIn,
@@ -22,6 +24,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 Read = Annotated[object, Depends(require_permission(Module.TASKS, Action.READ))]
 Create = Annotated[object, Depends(require_permission(Module.TASKS, Action.CREATE))]
 Update = Annotated[object, Depends(require_permission(Module.TASKS, Action.UPDATE))]
+Manage = Annotated[object, Depends(require_permission(Module.TASKS, Action.MANAGE))]
 
 View = Literal["overdue", "today", "week", "upcoming", "open", "completed"]
 
@@ -41,10 +44,11 @@ def _list(
     desc: bool = False,
     page: int = 1,
     page_size: int = 25,
+    archived: str = "active",
 ) -> TaskPage:
     return TaskService(session).search(
         q, branch_id, all_branches, status_, assignee_id, unassigned, due_from, due_to,
-        view, sort, desc, page, page_size,
+        view, sort, desc, page, page_size, archived,
     )  # fmt: skip
 
 
@@ -102,12 +106,15 @@ def list_tasks(
     view: View | None = None,
     sort: Literal["due", "created", "title", "status"] = "due",
     desc: bool = False,
+    archived: Annotated[
+        ArchiveFilter, Query(description="active (default), archived or all")
+    ] = "active",
     page: Annotated[int, Query(ge=1, le=100000)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> TaskPage:
     return _list(
         session, view, q, branch_id, all_branches, status_, assignee_id, unassigned,
-        due_from, due_to, sort, desc, page, page_size,
+        due_from, due_to, sort, desc, page, page_size, archived,
     )  # fmt: skip
 
 
@@ -143,3 +150,21 @@ def set_status(task_id: uuid.UUID, body: StatusIn, session: DbSession, _p: Updat
 @router.post("/{task_id}/complete", response_model=TaskDetail, summary="Mark a task as completed")
 def complete(task_id: uuid.UUID, session: DbSession, _p: Update) -> TaskDetail:
     return TaskService(session).set_status(task_id, StatusIn(status="Done"))
+
+
+@router.post(
+    "/{task_id}/archive",
+    response_model=TaskDetail,
+    summary="Archive a task (Owner; reason required; history kept)",
+)
+def archive_task(task_id: uuid.UUID, body: ReasonIn, session: DbSession, _p: Manage) -> TaskDetail:
+    return TaskService(session).archive(task_id, body)
+
+
+@router.post(
+    "/{task_id}/restore",
+    response_model=TaskDetail,
+    summary="Restore an archived task (Owner; reason required)",
+)
+def restore_task(task_id: uuid.UUID, body: ReasonIn, session: DbSession, _p: Manage) -> TaskDetail:
+    return TaskService(session).restore(task_id, body)

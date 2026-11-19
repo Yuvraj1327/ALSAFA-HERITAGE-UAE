@@ -1221,17 +1221,22 @@ class AnalyticsService(BaseService):
     # ---- tasks and missing reports -----------------------------------------------------------------------
     def tasks_by_branch(self, rf: RF) -> Table:
         rows = [{"branch": r["branch_name"], "total": int(r["total"]), "to_do": int(r["to_do"]),
-                 "in_progress": int(r["in_progress"]), "done": int(r["done"]), "overdue": int(r["overdue"])}
+                 "in_progress": int(r["in_progress"]), "done": int(r["done"]), "overdue": int(r["overdue"]),
+                 "archived_open": int(r["archived_open"])}
                 for r in self.repo.tasks_by_branch(rf.branch_id, self.today)]  # fmt: skip
         s = lambda k: sum(r[k] for r in rows)  # noqa: E731
         return Table(
             "tasks_by_branch",
             [C("branch", "Branch"), C("total", "Total", "int"), C("to_do", "To Do", "int"),
-             C("in_progress", "In Progress", "int"), C("done", "Completed", "int"), C("overdue", "Overdue", "int")],
+             C("in_progress", "In Progress", "int"), C("done", "Completed", "int"), C("overdue", "Overdue", "int"),
+             C("archived_open", "Archived (not completed)", "int")],
             rows,
             [S("Total tasks", s("total"), "int"), S("To Do", s("to_do"), "int"), S("In Progress", s("in_progress"), "int"),
-             S("Completed", s("done"), "int"), S("Overdue", s("overdue"), "int")],
-            ["Overdue = due date passed (Dubai) and not Done. Tasks are shown as at today; the date range does not apply."],
+             S("Completed", s("done"), "int"), S("Overdue", s("overdue"), "int"),
+             S("Archived (not completed)", s("archived_open"), "int")],
+            ["Overdue = due date passed (Dubai) and not Done. Tasks are shown as at today; the date range does not apply.",
+             "Archived tasks stay in the totals and in the completion history; archived tasks that were never completed are counted "
+             "separately and are not live work (Total = To Do + In Progress + Completed + Archived)."],
         )  # fmt: skip
 
     def tasks_completed(self, rf: RF) -> Table:

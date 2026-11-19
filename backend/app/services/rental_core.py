@@ -212,6 +212,10 @@ def agreement_dict(row: dict[str, Any], today: date) -> dict[str, Any]:
         "updated_at": row["updated_at"],
         "created_by_name": row["created_by_name"],
         "updated_by_name": row["updated_by_name"],
+        "terminated_on": row["terminated_on"],
+        "terminated_at": row["terminated_at"],
+        "termination_reason": row["termination_reason"],
+        "terminated_by_name": row["terminated_by_name"],
     }
 
 

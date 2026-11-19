@@ -22,6 +22,7 @@ from app.schemas.orders import (
     CustomerIn,
     CustomerOut,
     CustomerPage,
+    CustomerReasonIn,
     CustomerUpdate,
     HistoryItem,
     OrderDetail,
@@ -91,6 +92,14 @@ class OrderService(BaseService):
             raise NotFoundError("Customer not found")
         return row
 
+    @staticmethod
+    def _writable_customer(row: dict[str, Any]) -> None:
+        if row["archived"]:
+            raise ConflictError(
+                "This customer is archived. Restore the customer before changing it or creating an order.",
+                code="customer_archived",
+            )
+
     def _prepare_customer(self, body: CustomerFields) -> dict[str, Any]:
         v = body.model_dump(exclude={"branch_id"})
         v["mobile"] = rules.normalize_mobile(body.mobile)
@@ -103,8 +112,13 @@ class OrderService(BaseService):
         v = self._prepare_customer(body)
         dup = self.repo.customer_by_mobile(branch_id, v["mobile"])
         if dup:
+            hint = (
+                "That customer is archived: restore the customer instead."
+                if dup["archived"]
+                else "Select that customer instead."
+            )
             raise ConflictError(
-                f"This mobile number already belongs to {dup['name']}. Select that customer instead.",
+                f"This mobile number already belongs to {dup['name']}. {hint}",
                 code="duplicate_customer",
                 fields={"customer_id": [str(dup["id"])]},
             )
@@ -136,7 +150,7 @@ class OrderService(BaseService):
         self, scope: BranchScope, id_: uuid.UUID, body: CustomerUpdate
     ) -> CustomerOut:
         def work() -> None:
-            self._customer_visible(scope, id_)
+            self._writable_customer(self._customer_visible(scope, id_))
             v = self._prepare_customer(body)
             other = self.repo.customer_by_mobile(
                 self._customer_visible(scope, id_)["branch_id"], v["mobile"]
@@ -160,12 +174,51 @@ class OrderService(BaseService):
         q: str | None,
         page: int,
         page_size: int,
+        archived: str = "active",
     ) -> CustomerPage:
         branch = scope.resolve(branch_id)
-        rows, total = self.repo.list_customers(branch, q, page_size, (page - 1) * page_size)
+        rows, total = self.repo.list_customers(
+            branch, q, page_size, (page - 1) * page_size, archived
+        )
         return CustomerPage(
             items=[CustomerOut(**r) for r in rows], total=total, page=page, page_size=page_size
         )
+
+    def archive_customer(
+        self, scope: BranchScope, id_: uuid.UUID, body: CustomerReasonIn
+    ) -> CustomerOut:
+        """Hides the customer from lists and new orders. Orders, payments and history are never touched."""
+
+        def work() -> None:
+            row = self._customer_visible(scope, id_)
+            if row["archived"]:
+                raise ConflictError("This customer is already archived", code="already_archived")
+            if row["open_orders"]:
+                raise ConflictError(
+                    f"This customer has {row['open_orders']} open order(s). "
+                    "Deliver or cancel them before archiving the customer.",
+                    code="customer_has_open_orders",
+                )
+            self.repo.set_reason(body.reason)
+            self.repo.set_customer_archived(id_, body.reason)
+            self.session.commit()
+
+        self.run(work)
+        return self.get_customer(scope, id_)
+
+    def restore_customer(
+        self, scope: BranchScope, id_: uuid.UUID, body: CustomerReasonIn
+    ) -> CustomerOut:
+        def work() -> None:
+            row = self._customer_visible(scope, id_)
+            if not row["archived"]:
+                raise ConflictError("This customer is not archived", code="not_archived")
+            self.repo.set_reason(body.reason)
+            self.repo.set_customer_archived(id_, None)
+            self.session.commit()
+
+        self.run(work)
+        return self.get_customer(scope, id_)
 
     # ---- orders ----------------------------------------------------------------------------------------
     def _schedule(self, body: Any) -> tuple[datetime | None, datetime]:
@@ -192,12 +245,18 @@ class OrderService(BaseService):
         def work() -> uuid.UUID:
             if body.customer_id:
                 cust = self._customer_visible(scope, body.customer_id)
+                self._writable_customer(cust)
                 if body.branch_id and body.branch_id != cust["branch_id"]:
                     raise UnprocessableError(
                         "The customer belongs to another branch",
                         fields={"branch_id": ["Does not match the customer"]},
                     )
                 branch = scope.ensure(cust["branch_id"])
+                if (b := self.repo.branch(branch)) is None or not b["is_active"]:
+                    raise UnprocessableError(
+                        "That branch is not available",
+                        fields={"branch_id": ["The branch is inactive"]},
+                    )
                 customer_id = body.customer_id
             else:
                 assert body.new_customer is not None

@@ -381,10 +381,10 @@ class AlertRepository(BaseRepository):
       and e.leave_start + interval '6 months' <= cast(:t as date) + 30) as leave_limit_30,
   (select count(*) from public.employees e where e.archived_at is null and e.passport_expiry is not null
       and e.passport_expiry <= cast(:t as date) + 30) as passports_30,
-  (select count(*) from public.tasks k where k.due_date is not null and k.due_date < cast(:t as date)
+  (select count(*) from public.tasks k where k.archived_at is null and k.due_date is not null and k.due_date < cast(:t as date)
       and k.status <> 'Done') as tasks_overdue,
-  (select count(*) from public.tasks k where k.due_date = cast(:t as date) and k.status <> 'Done') as tasks_due_today,
-  (select count(*) from public.tasks k where k.due_date > cast(:t as date) and k.due_date <= cast(:t as date) + 7
+  (select count(*) from public.tasks k where k.archived_at is null and k.due_date = cast(:t as date) and k.status <> 'Done') as tasks_due_today,
+  (select count(*) from public.tasks k where k.archived_at is null and k.due_date > cast(:t as date) and k.due_date <= cast(:t as date) + 7
       and k.status <> 'Done') as tasks_due_7,
   (select count(*) from public.trade_licenses l where l.archived_at is null and l.expiry_date <= cast(:t as date) + 30) as licenses_30,
   (select count(*) from public.trade_licenses l where l.archived_at is null
@@ -398,11 +398,11 @@ class AlertRepository(BaseRepository):
   (select count(*) from public.pdc_cheques c where c.status = 'Bounced'
       and not exists (select 1 from public.pdc_cheques r where r.replaces_id = c.id)) as cheques_bounced,
   (select count(*) from public.pdc_cheques c where c.status = 'Pending'
-      and c.cheque_date < cast(:t as date)) as pdc_overdue,
+      and c.cheque_date < cast(:t as date) and not exists (select 1 from public.rental_agreements ta where ta.id = c.agreement_id and ta.status = 'Terminated')) as pdc_overdue,
   (select count(*) from public.pdc_cheques c where c.status = 'Pending'
-      and c.cheque_date between cast(:t as date) and cast(:t as date) + 7) as pdc_due_7,
+      and c.cheque_date between cast(:t as date) and cast(:t as date) + 7 and not exists (select 1 from public.rental_agreements ta where ta.id = c.agreement_id and ta.status = 'Terminated')) as pdc_due_7,
   (select count(*) from public.pdc_cheques c where c.status = 'Pending'
-      and c.cheque_date between cast(:t as date) + 8 and cast(:t as date) + 30) as pdc_due_30,
+      and c.cheque_date between cast(:t as date) + 8 and cast(:t as date) + 30 and not exists (select 1 from public.rental_agreements ta where ta.id = c.agreement_id and ta.status = 'Terminated')) as pdc_due_30,
   (select count(*) from public.suppliers s join public.v_supplier_outstanding v on v.supplier_id = s.id
       where s.is_active and v.outstanding > 0) as suppliers_owed,
   (select coalesce(sum(v.outstanding), 0) from public.suppliers s join public.v_supplier_outstanding v on v.supplier_id = s.id

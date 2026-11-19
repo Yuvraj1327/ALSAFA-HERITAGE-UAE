@@ -103,6 +103,10 @@ export const agreementSchema = z.object({
   updated_at: z.string(),
   created_by_name: z.string().nullable(),
   updated_by_name: z.string().nullable(),
+  terminated_on: date.nullable().default(null),
+  terminated_at: z.string().nullable().default(null),
+  termination_reason: z.string().nullable().default(null),
+  terminated_by_name: z.string().nullable().default(null),
 })
 export type Agreement = z.infer<typeof agreementSchema>
 

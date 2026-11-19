@@ -127,3 +127,15 @@ Report (`/reports/catalog`, `/overview`, `/charts`, `/{key}`, `/{key}/export`) a
 
 ## Step 13 additions
 Customer (`/customers`), order (`/orders`, including status, cancel, payments, dashboard and reports) and pickup/delivery (`/order-operations`) endpoints are documented in `docs/orders/STEP13_CUSTOMER_ORDERS.md` section 9. They are available to the Owner (all branches) and to Branch Users (own branch only), except cancel and refund, which are Owner only.
+
+
+## Archive / terminate / activate endpoints (migration 0023)
+| Method Path | Purpose | Role | Body | Notes |
+|---|---|---|---|---|
+| POST /tasks/{id}/archive, /restore | archive / restore a task | Owner | `{reason}` (3-500 chars) | 409 `already_archived` / `not_archived`; an archived task is read-only (409 `task_archived`); `GET /tasks?archived=active|archived|all` |
+| POST /rentals/{id}/terminate | terminate an Active agreement | Owner | `{termination_date, reason, confirm: true}` | date inside the agreement period and not in the future; cheques are never changed; 409 `agreement_closed` if not Active; 422 `confirmation_required` |
+| POST /customers/{id}/archive, /restore | archive / restore a customer | Owner, Branch User (own branch) | `{reason}` | 409 `customer_has_open_orders`, `customer_archived`; `GET /customers?archived=active|archived|all` |
+| GET /branches/{id}/dependencies | what still depends on a branch | Owner | - | items: active_users, open_orders, active_agreements, open_tasks, branch_cash, last_active_branch |
+| POST /branches/{id}/deactivate, /activate | deactivate / activate a branch | Owner | `{reason}` | 409 `branch_has_dependencies` (message lists them), `already_inactive`, `already_active` |
+
+There is no `DELETE` route in the API.

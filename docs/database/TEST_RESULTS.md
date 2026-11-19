@@ -75,3 +75,13 @@ The pre-existing failures (all reproduced on the commit before this feature): ba
 (`PATCH /auth/profile` now exists and answers 422; verified that role/branch/active/user_id changes are all refused and the role is unchanged), `test_activity_export_is_complete_and_owner_only`
 (the activity report gained a 8th "Source" column; the test still counts 7-column rows); database `test_audit_does_not_store_secrets` (matches the harmless flag `must_change_password: false`),
 `test_preferences_are_private_per_user` (the test asserts an error inside an open transaction block). Browser: Sign out now opens a confirmation dialog, which 3 of the 7 old scenarios do not click through; the rest are layout/label drift.
+
+## Migration 0023 (archive / terminate / activate) — real PostgreSQL 16.2
+
+| Suite | Result |
+|---|---|
+| `database/tests` (new `test_archive_terminate_activate.py`: tasks, rentals, customers, branches) | 240 passed, 2 failed (the same 2 pre-existing, unrelated) |
+| `backend/tests` (new `test_archive_terminate_activate_api.py`, 23 tests) | 718 passed, 4 failed (the same 4 pre-existing, unrelated) |
+| `frontend` (new `archive-actions.test.tsx`, 19 tests) | 370 passed; `tsc`, ESLint, Prettier, build clean |
+| Browser end to end (real Chrome, real frontend / backend / PostgreSQL, simulated Auth) | 130 of 137 passed: the 6 new `ARCHIVE` scenarios and all `ITEMISED` scenarios pass; the 7 failures are the same 7 that fail on the commit before the itemised-expenses work (login / layout drift) |
+| Large synthetic database: 0021 + 0022 + 0023 | every balance, ledger row, report and supplier figure identical before and after; 0023 touches no money table |

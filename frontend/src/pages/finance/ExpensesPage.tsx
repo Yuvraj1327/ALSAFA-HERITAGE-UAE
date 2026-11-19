@@ -216,9 +216,9 @@ export function ExpensesPage() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setVoiding(r)}
-                aria-label={`Delete expense ${r.category} ${r.expense_date}`}
+                aria-label={`Void expense ${r.category} ${r.expense_date}`}
               >
-                <Ban aria-hidden /> Delete
+                <Ban aria-hidden /> Void
               </Button>
             </Can>
           ) : null}
@@ -380,17 +380,17 @@ export function ExpensesPage() {
       <ReasonDialog
         open={voiding !== null}
         onOpenChange={(o) => !o && setVoiding(null)}
-        title="Delete this expense?"
-        confirmLabel="Delete expense"
+        title="Void this expense?"
+        confirmLabel="Void expense"
         isLoading={voidExpense.isPending}
         description={
           voiding
-            ? `${voiding.category}, ${formatAED(voiding.amount)} on ${formatDate(voiding.expense_date)}. It is removed from all balances; the record stays in the audit log.`
+            ? `${voiding.category}, ${formatAED(voiding.amount)} on ${formatDate(voiding.expense_date)}. It is removed from all balances and totals; the record is not deleted and stays in the audit log.`
             : null
         }
         onSubmit={async (reason) => {
           await voidExpense.mutateAsync({ id: (voiding as Expense).id, reason })
-          toast.success('Expense deleted')
+          toast.success('Expense voided')
         }}
       />
       <ReasonDialog

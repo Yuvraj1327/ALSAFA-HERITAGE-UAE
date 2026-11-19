@@ -12,13 +12,15 @@ TASK_SELECT = """
 select t.id, t.title, t.description, t.branch_id, coalesce(b.name, 'All Branches') as branch_name,
        t.assignee_user_id as assignee_id, coalesce(a.full_name, 'Unassigned') as assignee_name,
        t.due_date, t.status, t.notes, t.created_at, cr.full_name as created_by_name,
-       t.updated_at, up.full_name as updated_by_name, t.completed_at, co.full_name as completed_by_name
+       t.updated_at, up.full_name as updated_by_name, t.completed_at, co.full_name as completed_by_name,
+       (t.archived_at is not null) as archived, t.archived_at, t.archive_reason, ar.full_name as archived_by_name
   from public.tasks t
   left join public.branches b on b.id = t.branch_id
   left join public.profiles a on a.user_id = t.assignee_user_id
   left join public.profiles cr on cr.user_id = t.created_by
   left join public.profiles up on up.user_id = t.updated_by
-  left join public.profiles co on co.user_id = t.completed_by"""
+  left join public.profiles co on co.user_id = t.completed_by
+  left join public.profiles ar on ar.user_id = t.archived_by"""
 
 SORTS = {
     "due": "t.due_date",
@@ -88,8 +90,13 @@ class TaskRepository(BaseRepository):
         desc: bool,
         page: int,
         page_size: int,
+        archived: str = "active",
     ) -> tuple[list[Row], int]:
         where = ["1 = 1"]
+        if archived == "active":
+            where.append("t.archived_at is null")
+        elif archived == "archived":
+            where.append("t.archived_at is not null")
         p: dict[str, Any] = {"t": today}
         if q:
             where.append("(t.title ilike :q or coalesce(t.description, '') ilike :q)")
@@ -145,7 +152,7 @@ class TaskRepository(BaseRepository):
   count(*) filter (where status <> 'Done' and due_date < cast(:t as date)) as overdue,
   count(*) filter (where status <> 'Done' and due_date = cast(:t as date)) as due_today,
   count(*) filter (where status <> 'Done' and due_date between cast(:t as date) and cast(:t as date) + 7) as due_7
-from public.tasks""",
+from public.tasks where archived_at is null""",
             {"t": today},
         )
         assert r is not None
@@ -172,4 +179,22 @@ from public.tasks""",
     def set_status(self, id_: uuid.UUID, status: str) -> None:
         self.session.execute(
             text("update public.tasks set status = :s where id = :id"), {"s": status, "id": id_}
+        )
+
+    def archive(self, id_: uuid.UUID, reason: str) -> None:
+        self.session.execute(
+            text(
+                "update public.tasks set archived_at = now(), archived_by = auth.uid(), archive_reason = :r"
+                " where id = :id and archived_at is null"
+            ),
+            {"r": reason, "id": id_},
+        )
+
+    def restore(self, id_: uuid.UUID) -> None:
+        self.session.execute(
+            text(
+                "update public.tasks set archived_at = null, archived_by = null, archive_reason = null"
+                " where id = :id and archived_at is not null"
+            ),
+            {"id": id_},
         )

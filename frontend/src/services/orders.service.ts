@@ -80,6 +80,7 @@ export const addPayment = async (id: string, body: Record<string, unknown>) =>
 export const listCustomers = async (p: {
   q?: string
   branch_id?: string
+  archived?: 'active' | 'archived' | 'all'
   page: number
   page_size?: number
 }) =>
@@ -92,6 +93,11 @@ export const createCustomer = async (body: Record<string, unknown>) =>
   customerSchema.parse((await apiClient.post<unknown>('/customers', body)).data)
 export const updateCustomer = async (id: string, body: Record<string, unknown>) =>
   customerSchema.parse((await apiClient.put<unknown>(`/customers/${id}`, body)).data)
+/** Archive / restore a customer: orders and payments are never touched; a reason is mandatory. */
+export const archiveCustomer = async (id: string, reason: string) =>
+  customerSchema.parse((await apiClient.post<unknown>(`/customers/${id}/archive`, { reason })).data)
+export const restoreCustomer = async (id: string, reason: string) =>
+  customerSchema.parse((await apiClient.post<unknown>(`/customers/${id}/restore`, { reason })).data)
 export const listCustomerOrders = async (id: string, page = 1) =>
   orderPageSchema.parse(
     (await apiClient.get<unknown>(`/customers/${id}/orders`, { params: { page } })).data,

@@ -793,16 +793,24 @@ describe('Expenses & Savings page', () => {
     })
   })
 
-  it('deleting is a void with a reason, never a hard delete', async () => {
+  it('removing an expense is called Void everywhere: a void with a reason, never a hard delete', async () => {
     const calls = api(owner())
     const user = userEvent.setup()
     renderApp('/expenses')
-    await user.click(await screen.findByRole('button', { name: /Delete expense Utilities/ }))
+    const button = await screen.findByRole('button', { name: /Void expense Utilities/ })
+    expect(button).toHaveTextContent('Void')
+    expect(screen.queryByRole('button', { name: /Delete/ })).not.toBeInTheDocument()
+    await user.click(button)
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('Void this expense?')).toBeInTheDocument()
+    expect(dialog).not.toHaveTextContent(/delete this|Delete expense/i)
     await user.type(await screen.findByRole('textbox', { name: /Reason/ }), 'duplicate bill')
-    await user.click(screen.getByRole('button', { name: 'Delete expense' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Void expense' }))
     await waitFor(() => expect(posted(calls, '/expenses/e1/void')).toBeTruthy())
     expect(body(posted(calls, '/expenses/e1/void')!)).toEqual({ reason: 'duplicate bill' })
     expect(calls.some((c) => c.method === 'delete')).toBe(false)
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Expense voided'))
+    expect(toast.success).not.toHaveBeenCalledWith('Expense deleted')
   })
 
   it('editing asks for a reason and sends the correction as PUT', async () => {

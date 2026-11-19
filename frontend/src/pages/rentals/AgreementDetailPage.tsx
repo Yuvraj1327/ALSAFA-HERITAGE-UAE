@@ -1,4 +1,4 @@
-import { ArrowLeft, Pencil, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Ban, Pencil, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Can } from '@/auth/permission-guards'
@@ -18,6 +18,7 @@ import { ChequeActions } from './ChequeActions'
 import { endText } from './helpers'
 import { AgreementBadge, ChequeBadge, ChequeHistory, ChequeLink } from './shared'
 import { RenewDialog } from './RenewDialog'
+import { TerminateDialog } from './TerminateDialog'
 
 const RELATION = {
   previous: 'Previous agreement',
@@ -30,6 +31,7 @@ export function AgreementDetailPage() {
   const detail = useAgreement(id)
   const [editing, setEditing] = useState(false)
   const [renewing, setRenewing] = useState(false)
+  const [terminating, setTerminating] = useState(false)
 
   if (detail.isLoading) return <LoadingState label="Loading agreement…" />
   if (detail.error || !detail.data)
@@ -105,12 +107,24 @@ export function AgreementDetailPage() {
               <RefreshCw aria-hidden /> Renew
             </Button>
           </Can>
+          <Can module="rentals_cheques" action="manage">
+            <Button variant="outline" onClick={() => setTerminating(true)} disabled={!open}>
+              <Ban aria-hidden /> Terminate
+            </Button>
+          </Can>
         </>
       }
     >
       {!open ? (
         <p className="text-sm text-muted-foreground">
           This agreement is {a.status.toLowerCase()}, so it can no longer be edited or renewed.
+        </p>
+      ) : null}
+      {a.terminated_on ? (
+        <p role="note" className="rounded-md border bg-muted/40 p-3 text-sm">
+          <strong>Terminated on {formatDate(a.terminated_on)}</strong>
+          {a.terminated_by_name ? ` by ${a.terminated_by_name}` : ''}. Reason:{' '}
+          {a.termination_reason ?? '—'}. Its cheques are kept below.
         </p>
       ) : null}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -198,6 +212,7 @@ export function AgreementDetailPage() {
 
       <AgreementDialog open={editing} onOpenChange={setEditing} agreement={a} />
       <RenewDialog open={renewing} onOpenChange={setRenewing} agreement={a} />
+      <TerminateDialog open={terminating} onOpenChange={setTerminating} agreement={a} />
     </PageContainer>
   )
 }

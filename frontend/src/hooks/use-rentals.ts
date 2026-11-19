@@ -49,6 +49,11 @@ export const useRenewAgreement = () =>
     api.renewAgreement(v.id, v.body),
   )
 
+export const useTerminateAgreement = () =>
+  useRentalMutation((v: { id: string; body: { termination_date: string; reason: string } }) =>
+    api.terminateAgreement(v.id, v.body),
+  )
+
 /* ---------- cheques ---------- */
 export const useChequeSummary = () =>
   useQuery({ queryKey: ['pdc', 'summary'], queryFn: api.getChequeSummary, ...q })

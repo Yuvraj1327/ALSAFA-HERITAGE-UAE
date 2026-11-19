@@ -4,7 +4,9 @@ import { Link } from 'react-router-dom'
 import { Can } from '@/auth/permission-guards'
 import { DataTable } from '@/components/common/data-table'
 import { Pagination } from '@/components/common/pagination'
+import { StatusBadge } from '@/components/common/status-badge'
 import { FormInput } from '@/components/forms/form-input'
+import { FormSelect } from '@/components/forms/form-select'
 import { useBranchContext } from '@/components/layout/branch-context'
 import { PageContainer } from '@/components/layout/page-container'
 import { Button } from '@/components/ui/button'
@@ -19,9 +21,11 @@ export function CustomersPage() {
   const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
   const [adding, setAdding] = useState(false)
+  const [show, setShow] = useState<'active' | 'archived' | 'all'>('active')
   const list = useCustomers({
     q: q.trim(),
     branch_id: canChoose && selectedBranchId !== 'all' ? selectedBranchId : undefined,
+    ...(show !== 'active' ? { archived: show } : {}),
     page,
     page_size: 25,
   })
@@ -37,17 +41,32 @@ export function CustomersPage() {
         </Can>
       }
     >
-      <FormInput
-        label="Search customers"
-        type="search"
-        placeholder="Name or mobile number"
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value)
-          setPage(1)
-        }}
-        maxLength={100}
-      />
+      <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
+        <FormInput
+          label="Search customers"
+          type="search"
+          placeholder="Name or mobile number"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value)
+            setPage(1)
+          }}
+          maxLength={100}
+        />
+        <FormSelect
+          label="Show"
+          value={show}
+          onValueChange={(v) => {
+            setShow(v as 'active' | 'archived' | 'all')
+            setPage(1)
+          }}
+          options={[
+            { value: 'active', label: 'Active customers' },
+            { value: 'archived', label: 'Archived customers' },
+            { value: 'all', label: 'Active and archived' },
+          ]}
+        />
+      </div>
       <DataTable
         caption="Customers"
         rows={list.data?.items}
@@ -62,9 +81,15 @@ export function CustomersPage() {
             key: 'name',
             header: 'Customer',
             cell: (c) => (
-              <Link to={`/customers/${c.id}`} className="font-medium text-primary hover:underline">
-                {c.name}
-              </Link>
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <Link
+                  to={`/customers/${c.id}`}
+                  className="font-medium text-primary hover:underline"
+                >
+                  {c.name}
+                </Link>
+                {c.archived ? <StatusBadge status="neutral">Archived</StatusBadge> : null}
+              </span>
             ),
           },
           { key: 'mobile', header: 'Mobile', cell: (c) => c.mobile },
